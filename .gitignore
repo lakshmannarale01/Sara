@@ -1,0 +1,5 @@
+.venv/
+sara_data/
+__pycache__/
+*.pyc
+.env
