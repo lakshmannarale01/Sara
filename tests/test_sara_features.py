@@ -2,6 +2,7 @@ import unittest
 
 from sara_app.ai import fallback_speech_text
 from sara_app.server import agenda_reply, calendar_ics, event_title, parse_event_start, workspace_target, read_workspace_text
+from sara_app.intents import capability_request
 
 
 class SaraFeatureTests(unittest.TestCase):
@@ -34,6 +35,20 @@ class SaraFeatureTests(unittest.TestCase):
         self.assertIsNone(workspace_target("sara_data/activity.jsonl"))
         self.assertIsNone(workspace_target("../outside.txt"))
         self.assertIsNotNone(read_workspace_text("SARA_SETUP_GUIDE.md")[0])
+
+    def test_capability_request_returns_grounded_calendar_plan(self):
+        plan = capability_request("kya aap Google calendar sync functionality bana doge")
+        self.assertEqual(plan["key"], "external_calendar_sync")
+        self.assertIn("OAuth", plan["access"])
+        self.assertGreaterEqual(len(plan["steps"]), 2)
+
+    def test_normal_question_is_not_capability_request(self):
+        self.assertIsNone(capability_request("aaj ka plan batao"))
+
+    def test_jarvis_upgrade_request_is_classified(self):
+        plan = capability_request("SARA ko Jarvis jaise intelligent banao")
+        self.assertEqual(plan["key"], "system_control")
+        self.assertIsNotNone(capability_request("SARA ko Jarvis jaise pura banana hai"))
 
 
 if __name__ == "__main__":

@@ -2,6 +2,8 @@
 setlocal
 cd /d "%~dp0"
 title SARA AI
+if not defined SARA_UI_MODE set "SARA_UI_MODE=app"
+if not defined SARA_UI_BROWSER set "SARA_UI_BROWSER=edge"
 if not exist ".venv\Scripts\python.exe" (
   where py >nul 2>nul
   if errorlevel 1 ( echo Python is not installed. Install Python 3.11+ and try again. & pause & exit /b 1 )

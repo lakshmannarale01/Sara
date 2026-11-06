@@ -6,11 +6,21 @@
 
 - Ask questions by text or voice.
 - SARA aims to reply in the user's language and style, including Hindi/Hinglish.
-- Hindi/Hinglish speech uses local Ollama transliteration to convert Roman Hindi words into Devanagari before the selected system voice reads them; Ollama must be running.
+- Spoken replies are enabled by default, with automatic female system voice selection when available and a 1.15× default speed. The dashboard uses fast local Hinglish conversion for system speech. Settings diagnostics show the voice, language, and speed queued for the latest system reply, and warn if no Hindi voice was available. Settings also offers optional natural AI voice through the OpenAI API when configured; it uses API credits and is disclosed as AI-generated.
 - SARA receives the live capability registry and should explain a missing feature, identify needed access where known, and offer to plan/implement it.
-- Say `SARA` to wake the voice session.
-- After waking, follow-up speech remains active for the current conversation window.
+- Ask `SARA, what can you do?` or `capabilities dikhao` for a direct summary from the live registry, grouped into available, limited, and not-yet-configured features.
+- If you ask for a missing feature (for example, `kya aap Google calendar sync bana doge?`), SARA returns a grounded implementation plan, required access, and the safe next command; she does not pretend that the feature already ran.
+- The dashboard launches as a standalone SARA app window by default, without normal browser tabs or an address bar; use `SARA_UI_MODE=browser` only when you want a regular browser window.
+- Say `SARA` to wake the voice session. Wake mode is enabled by default, remembered across dashboard reloads, and automatically re-arms after a reply or a short browser recognition timeout. The first browser microphone permission still needs to be allowed; some browsers also require one click on the dashboard before listening can start.
+- One microphone click starts continuing hands-free conversation. Listening resumes after replies; direct follow-ups stay open for 60 seconds after playback finishes, then say `Sara` again. Temporary service/network errors reconnect without disabling the preference. Explicit mic Stop stays stopped; denied permission/device errors need user correction.
+- AI text streams incrementally; routine replies use a bounded output/context budget. Greetings and existing local tool routes do not require an AI generation.
+- System speech keeps mixed sentences together to avoid word-level voice-switch gaps, with local pronunciation cleanup, common technical Hindi phonetics, spoken acronym expansions, and an in-session preparation cache. Unfamiliar names and Roman Hindi spellings can still need a pronunciation entry.
+- Add a custom say-as rule in Settings → Pronunciation guide, or say `pronounce Kalpana as कल्पना` and approve it. Entries are stored locally and affect speech only; chat text stays unchanged. Remove entries from the same Settings panel.
+- Performance telemetry is available at `/api/performance`; reply timing is also attached to chat responses and terminal logs.
+- Notepad notes use one exact-content review, create a unique verified UTF-8 file and request Notepad to open that file. Approved-memory profile drafts do not invent personal facts. Saved-note previews remain accessible if app launch fails.
+- Short action follow-ups resolve session-scoped pending proposals and reopen review. Actual results appear in chat; stale, cancelled, modified and duplicate proposal execution is rejected.
 - Ask `SARA, system status batao` for a read-only check of Ollama, desktop control, browser runtime, approved memories, and pending reminders.
+- When a requested capability is missing, SARA explains its current status and required access, then offers to save the request locally. Approved requests appear under Settings & controls → Feature requests; saving only tracks the request and does not install or enable the feature.
 
 ### Browser and web
 
@@ -39,6 +49,8 @@ Currently allowlisted:
 
 SARA asks for confirmation before launching an application.
 
+You can add a custom shortcut in **Settings & controls → App shortcuts** by entering a name and the full path to an existing `.exe`. SARA keeps that allowlist in local `sara_data/apps.json`; you can remove an entry in Settings. Say `open VS Code` (using the shortcut name you saved) to request it in chat. SARA asks for approval before every launch. Only the executable path is launched: arguments and arbitrary shell commands are not supported.
+
 ### Focused desktop actions
 
 - `SARA, type Hello there in the focused app`
@@ -52,14 +64,14 @@ Desktop readiness can be checked at `GET /api/desktop/status`; it reports only P
 ### Files
 
 Read-only access is scoped to the project workspace. File creation, overwrite and deletion require explicit confirmation. `.venv` and `.git` are excluded from listing/read operations.
-- Ask `SARA, workspace files dikhao` to list readable project files, or `SARA, read file SARA_SETUP_GUIDE.md` to inspect a scoped text file. Runtime data, `.env`, `.git`, `.venv`, `__pycache__`, and `sara_data` stay excluded.
+- Ask `SARA, workspace files dikhao` to list readable project files, `SARA, read file SARA_SETUP_GUIDE.md` to inspect one, or `SARA, search project files for Kalpana` to find relevant lines. Search is bounded to text files in the project. `.env*`, common credential/key files, `.aws`, runtime data, `.git`, `.venv`, `__pycache__`, and `sara_data` stay excluded.
 
 ### Reminders
 
 - `SARA, remind me in 10 minutes`
 - `SARA, remind me at 7 PM`
 
-Reminders are stored locally and watched while the server is running.
+Reminders are stored locally. They are checked while SARA is open. To keep checking when SARA is closed, run `powershell -ExecutionPolicy Bypass -File .\install_sara_reminders.ps1` from the project folder. The optional current-user Scheduled Task checks once per minute while you are signed in. Remove it with `powershell -ExecutionPolicy Bypass -File .\uninstall_sara_reminders.ps1`. Reminders and notification attempts stay on this PC.
 
 ### Tasks and daily planning
 
@@ -76,8 +88,10 @@ The dashboard's Proactive suggestions toggle shows read-only suggestions from pe
 ### Learning and memory
 
 - SARA can use explicitly approved memories shown in the dashboard.
+- Replies use only records explicitly marked approved; relevant facts rank first and newer approved facts win ties. Unapproved/legacy records are left out of AI context.
 - Ordinary chat is not silently saved as long-term memory; add a preference or fact through the approved-memory control.
 - Say `SARA, remember that I prefer concise answers` or `SARA, learn that I prefer concise answers` to ask for an explicit confirmation before saving a preference. Use `memories dikhao` to review them and `forget memory 1` to remove one after confirmation.
+- Corrections such as `Don't call me Boss, call me Lakshman`, `mujhe Lakshman bulao`, `mujhe Hindi mein jawab do`, or `I like short answers` also offer a confirmation before they become long-term memory. SARA does not save these automatically.
 
 ### Messaging and email
 
@@ -108,9 +122,15 @@ Chat example: `SARA, send WhatsApp +919876543210: I will reach home at 7 PM.`
 ## Pending capabilities
 
 - Clicking and playing media inside browser pages without user-provided coordinates
-- Google/Outlook calendar sync
-- Automatic email sending
-- Arbitrary application control
-- Persistent notification service when the server is stopped
+- Google/Outlook calendar sync (local events and ICS export are available; provider OAuth is not configured)
+- Direct email account integration and automatic email sending (SARA opens reviewable drafts only)
+- Automatic app discovery, arbitrary app arguments, and shell command execution
+- Rich Windows toast notifications (current delivery uses a Windows message to the signed-in user)
+
+## Implemented safety controls
+
+- The dashboard shows a local action risk summary and a **Stop SARA actions / Resume** control.
+- The backend enforces the stop state and explicit confirmation for data changes and computer actions, including direct API requests.
+- Stop state lasts for the current server process; restarting the server resets it to running.
 
 When a task needs a pending capability, SARA should explain the missing access and ask whether it should be implemented.

@@ -9,6 +9,7 @@ This is the living checklist for permissions and integrations needed as SARA gai
 | Chat responses | Ollama running locally or `OPENAI_API_KEY` | Low | Available |
 | Voice input | Browser microphone permission | Medium | Available |
 | Voice output | Installed Windows voice or OpenAI TTS credits | Low | Windows voice path available |
+| Pronunciation preferences | Project read/write access to local `sara_data/pronunciations.json` | Low | Confirm before saving/removing; applies to spoken output only | Available |
 | Local memory | Project read/write access to `sara_data` | Medium | Available |
 | Local tasks and daily plans | Project read/write access to `sara_data/tasks.json` | Low | Confirmation before create/complete | Available |
 | Local planned events | Project read/write access to `sara_data/events.json` | Medium | Confirmation before create | Available; external calendar sync not included |
@@ -26,22 +27,24 @@ This is the living checklist for permissions and integrations needed as SARA gai
 | Open Chrome and websites | Desktop/browser control | Medium | Confirm unfamiliar or sensitive sites | Partial; HTTPS URL/search opening available |
 | Read local files | Explicit workspace scope; protected runtime and secret paths excluded | Medium | Read-only scoped access | Available inside the project workspace |
 | Create/edit files | Workspace write permission | High | Confirm exact path and overwrite | Available inside the safe workspace scope |
-| Send WhatsApp/messages | Logged-in messaging app or approved connector | High | Always confirm recipient and exact message | Planned |
-| Email | Logged-in email connector | High | Always confirm recipients, subject and body | Planned |
+| WhatsApp message send | Logged-in SARA Chromium profile | Critical | Confirm recipient and exact message immediately before sending | Available through guarded Playwright action |
+| Email account integration/send | Mail provider OAuth/API | High | Confirm recipients, subject and body | Planned; current app opens a reviewable mail draft only |
 | Calendar events | Local project storage; external connector not required | Medium | Confirm before creating events | Local events available; Google/Outlook sync planned |
 | Calendar export | Local read access to planned events | Low | Read-only download | Available as standard `.ics` |
-| Local reminders | Project storage in `sara_data/reminders.json`; server running; Windows `msg.exe` notification | Medium | Confirm before creating/deleting | Available; due watcher and notification attempt active |
-| List/read workspace files | Workspace read access; excludes `.venv` and `.git` | Medium | No confirmation for read-only scoped access | Available |
+| Local reminders | Project storage in `sara_data/reminders.json`; Windows `msg.exe`; optional current-user Scheduled Task | Medium | Confirm before creating/deleting; user explicitly runs installer to enable checks while SARA is closed | Available; server watcher or one-minute scheduled worker |
+| List/read/search workspace files | Workspace read access; bounded text search; excludes runtime folders, `.env*`, and common credential/key files | Medium | No confirmation for read-only scoped access | Available |
 | Write workspace files | Workspace write access | High | Always confirm exact path and content/overwrite | Available |
 | Delete workspace files | Workspace write access | Critical | Always confirm exact path; no recursive delete | Available |
 | WhatsApp message draft | WhatsApp Web login; recipient phone with country code | High | Confirm recipient and exact text; user presses Send | Draft available |
 | WhatsApp message send | WhatsApp Web login in SARA Chromium profile; recipient phone with country code | Critical | Confirm recipient and exact text immediately before sending | Available through guarded Playwright action |
-| Open allowlisted Windows apps | Windows process launch permission | Medium | Confirm app before launch | Available: Chrome, Notepad, Calculator |
+| Open allowlisted Windows apps | Windows process launch permission | Medium | Confirm app before every launch | Available: Chrome, Notepad, Calculator, and user-registered absolute `.exe` shortcuts; no arguments or shell commands |
+| Track a missing capability | Local SARA data folder | Low | Confirm before saving; removable in Settings | Available; tracking a request does not implement the feature |
 | Email draft | Default mail app/browser; recipient, subject and body | High | Confirm recipient and exact content; user presses Send | Draft available |
 | Desktop keyboard actions | PyAutoGUI in `.venv`; intended window must be focused | High | Confirm exact text/shortcut every time | Available: type text and safe keyboard shortcuts |
 | Coordinate click | PyAutoGUI in `.venv`; user must provide screen coordinates | High | Confirm exact coordinates every time | Available through the guarded action API |
 | Desktop readiness | No additional credential; local screen access | Low | Read-only status endpoint | Available; no screenshots collected |
 | Semantic browser actions | Playwright Chromium runtime; user browser login may be needed per site | High | Confirm exact navigation/click/type action | Available through SARA's separate Chromium profile |
+| Stop SARA actions | Local server process | Low | Immediate stop; restart/resume from dashboard | Available; in-memory and resets when server restarts |
 | Application launch/close | Windows desktop control | Medium | Safe apps can be opened; closing work needs confirmation | Planned |
 | System settings | Windows desktop control | High | Always confirm changes | Planned |
 | Shutdown/restart | Windows system permission | Critical | Always require explicit confirmation | Planned |
