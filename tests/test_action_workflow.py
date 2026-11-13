@@ -104,7 +104,8 @@ class ActionWorkflowTests(unittest.TestCase):
         data = self.chat("Open Karo.")
         self.assertEqual(data["provider"], "action-state")
         self.assertNotIn("action", data)
-        self.assertIn("koi pending action nahi", data["reply"].lower())
+        self.assertIsNone(self.store.pending(self.SESSION))
+        self.assertIn("नहीं", data["reply"])
         self.assert_no_execution()
 
     def test_other_dashboard_cannot_resume_or_execute_this_proposal(self):
@@ -264,7 +265,8 @@ class ActionWorkflowTests(unittest.TestCase):
     def test_status_without_execution_rejects_prior_chat_as_proof(self):
         data = self.chat("Did you open it?")
         self.assertEqual(data["provider"], "action-state")
-        self.assertIn("koi executed action result nahi", data["reply"])
+        self.assertEqual(self.store.context(self.SESSION)["recent_outcomes"], [])
+        self.assertIn("प्रमाण नहीं", data["reply"])
         self.assert_no_execution()
 
     def test_status_of_pending_action_does_not_report_it_as_completed(self):
@@ -273,7 +275,8 @@ class ActionWorkflowTests(unittest.TestCase):
         self.assertEqual(data["provider"], "action-state")
         self.assertTrue(data["requires_confirmation"])
         self.assertEqual(data["action"], proposal["action"])
-        self.assertIn("pending approval", data["reply"])
+        self.assertEqual(self.store.get(self.SESSION, proposal["proposal_id"])["status"], "pending")
+        self.assertIn("approval", data["reply"])
         self.assert_no_execution()
 
     def test_unsupported_app_operation_returns_grounded_failure_without_model(self):
@@ -281,6 +284,68 @@ class ActionWorkflowTests(unittest.TestCase):
         self.assertEqual(data["provider"], "action-unavailable")
         self.assertNotIn("action", data)
         self.assertIn("kuch execute nahi hua", data["reply"])
+        self.assert_no_execution()
+
+    def memory_deletion(self):
+        self.memories.return_value = [{"id": "memory-1", "text": "Reviewed fact", "approved": True}]
+        proposal = self.chat("forget memory 1")
+        self.assertEqual(proposal["action"]["text"], "Reviewed fact")
+        return {"id": "memory-1", "text": "Reviewed fact", "confirmed": True, "proposal_id": proposal["proposal_id"]}
+
+    def test_changed_memory_cannot_be_deleted_using_a_stale_review(self):
+        body = self.memory_deletion()
+        self.memories.return_value = [{"id": "memory-1", "text": "New edited fact", "approved": True}]
+        status, result = self.post("/api/memories/memory-1/delete", body)
+        self.assertEqual(status, 409, result)
+        self.assertEqual(result["action_result"]["status"], "failed")
+        server.write_memories.assert_not_called()
+
+    def test_missing_memory_is_not_reported_as_successfully_deleted(self):
+        body = self.memory_deletion()
+        self.memories.return_value = []
+        status, result = self.post("/api/memories/memory-1/delete", body)
+        self.assertEqual(status, 404, result)
+        self.assertEqual(result["action_result"]["status"], "failed")
+        server.write_memories.assert_not_called()
+
+    def test_reviewed_memory_deletes_only_selected_record_once(self):
+        body = self.memory_deletion()
+        remaining = {"id": "memory-2", "text": "Keep this", "approved": False}
+        self.memories.return_value.append(remaining)
+        writer = self.enter_patch(server, "write_memories")
+        status, result = self.post("/api/memories/memory-1/delete", body)
+        self.assertEqual(status, 200, result)
+        self.assertEqual(result["action_result"]["status"], "completed")
+        writer.assert_called_once_with([remaining])
+        status, _ = self.post("/api/memories/memory-1/delete", body)
+        self.assertEqual(status, 409)
+        writer.assert_called_once()
+
+    def test_changed_delete_payload_leaves_review_pending_without_writing(self):
+        body = self.memory_deletion()
+        body["text"] = "Unreviewed replacement"
+        status, result = self.post("/api/memories/memory-1/delete", body)
+        self.assertEqual(status, 409, result)
+        self.assertEqual(self.store.pending(self.SESSION)["id"], body["proposal_id"])
+        server.write_memories.assert_not_called()
+
+    def test_memory_listing_and_numbering_use_same_approved_valid_facts(self):
+        approved = {"id": "approved", "text": "Approved fact", "approved": True}
+        self.memories.return_value = [
+            {"id": "legacy", "text": "Legacy fact"},
+            {"id": "truthy", "text": "Not approved", "approved": "true"},
+            {"id": "blank", "text": "  ", "approved": True},
+            {"id": "nonstring", "text": 17, "approved": True}, approved,
+        ]
+        listing = self.chat("memories dikhao")
+        self.assertEqual(listing["memories"], [approved])
+        self.assertNotIn("Legacy fact", listing["reply"])
+        deletion = self.chat("forget memory 1")
+        self.assertEqual(deletion["action"]["id"], "approved")
+        self.assertEqual(deletion["action"]["text"], "Approved fact")
+        self.enter_patch(server, "ollama_health", return_value=False)
+        with patch.dict("sys.modules", {"pyautogui": Mock(size=Mock(return_value=(1920, 1080)))}):
+            self.assertEqual(server.system_summary()["approved_memories"], 1)
         self.assert_no_execution()
 
     def test_explanatory_notepad_question_keeps_normal_chat_available(self):

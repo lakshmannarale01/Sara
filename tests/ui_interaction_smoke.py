@@ -2,6 +2,7 @@
 import json
 import sys
 from playwright.sync_api import sync_playwright
+from browser_fixture import dashboard_fixture
 
 
 def main():
@@ -31,7 +32,8 @@ def main():
         def api(route):
             path = route.request.url.split("/api/")[-1]
             payload = {"agenda": {"tasks": [], "events": [], "reminders": []}, "memories": [],
-                       "conversations": [], "activity": [], "policy": {"stopped": False, "actions": {}},
+                       "conversations": [{"question": "Saved question from before restart", "answer": "Saved SARA answer", "provider": "ollama"}],
+                       "activity": [], "policy": {"stopped": False, "actions": {}},
                        "capabilities": {}, "health": {"ollama": True, "model": "test", "natural_voice": False}}
             if path == "chat":
                 route.fulfill(content_type="application/x-ndjson", body="\n".join(json.dumps(item) for item in [
@@ -48,19 +50,21 @@ def main():
                 route.fulfill(json=payload.get(path, {}))
 
         page.route("**/api/**", api)
-        page.goto(url)
+        page.goto(dashboard_fixture(page, url))
         page.locator("#send-button:not([disabled])").wait_for()
+        assert page.locator('.message.user .message-text').inner_text() == "Saved question from before restart"
+        assert page.locator('.message.assistant .message-text').inner_text() == "Saved SARA answer"
         # A prompt button must still work even though body itself has data-view.
         page.locator('.hero-actions button[data-prompt]').click()
         page.locator('.message.assistant .message-text').filter(has_text="SARA can help quickly.").wait_for()
         page.wait_for_function("window.__spoken.length === 1")
         spoken = page.evaluate("window.__spoken")
         assert [item["voice"] for item in spoken] == ["Microsoft Kalpana"], spoken
-        assert page.locator('.message.assistant').count() == 1
+        assert page.locator('.message.assistant').count() == 2
         assert page.locator('#thinking').is_hidden()
         assert page.locator('#send-button').is_enabled()
         assert not errors, errors
-        print("PASS: prompt navigation, streamed reply, no duplicate message, one continuous mixed-language phrase, idle controls")
+        print("PASS: saved conversation rendering, prompt navigation, streamed reply without duplicate, continuous mixed-language speech, idle controls")
         browser.close()
 
 

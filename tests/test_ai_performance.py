@@ -40,8 +40,8 @@ class AiPerformanceTests(unittest.TestCase):
             "conversations": patch.object(ai, "read_conversations", return_value=[]),
             "memories": patch.object(ai, "read_memories", return_value=[]),
             "capabilities": patch.object(ai, "capability_snapshot", return_value={
-                "chat": {"status": "available", "risk": "low"},
-                "email": {"status": "partial", "scope": "Reviewable drafts only; never sends mail"},
+                "chat": {"status": "available", "risk": "low", "scope": "Local text conversation"},
+                "email": {"status": "partial", "scope": "Reviewable drafts only; never sends mail", "confirmation": True},
                 "screen_vision": {"status": "planned", "scope": "Not implemented"},
             }),
             "urlopen": patch.object(ai.urllib.request, "urlopen", side_effect=AssertionError("Unexpected provider access")),
@@ -94,9 +94,9 @@ class AiPerformanceTests(unittest.TestCase):
         instructions = ai.build_instructions("email")
         capability_text = instructions.split("\nCapabilities: ", 1)[1].split("\nApproved memories: ", 1)[0]
         capabilities = json.loads(capability_text)
-        self.assertEqual(capabilities["ready"], ["chat"])
-        self.assertEqual(capabilities["limited"]["email"], "Reviewable drafts only; never sends mail")
-        self.assertEqual(capabilities["unavailable"], ["screen_vision"])
+        self.assertEqual(capabilities["ready"], {"chat": "Local text conversation"})
+        self.assertEqual(capabilities["limited"]["email"], "Reviewable drafts only; never sends mail; approval required")
+        self.assertEqual(capabilities["unavailable"], {"screen_vision": "Not implemented"})
         memories = json.loads(instructions.split("\nApproved memories: ", 1)[1])
         self.assertLessEqual(len(memories), 6)
         self.assertTrue(all(len(memory) <= 180 for memory in memories))

@@ -6,6 +6,7 @@ Usage: python tests/ui_smoke.py http://127.0.0.1:8765
 import sys
 
 from playwright.sync_api import sync_playwright
+from browser_fixture import dashboard_fixture
 
 
 def main():
@@ -14,9 +15,10 @@ def main():
         browser = playwright.chromium.launch(headless=True)
         for width, height in ((1366, 768), (1024, 768), (1092, 614), (1024, 600), (800, 600)):
             page = browser.new_page(viewport={"width": width, "height": height})
+            page.add_init_script("localStorage.setItem('sara-wake','false'); localStorage.setItem('sara-auto-speak','false');")
             errors = []
             page.on("pageerror", lambda error: errors.append(str(error)))
-            page.goto(url, wait_until="domcontentloaded")
+            page.goto(dashboard_fixture(page, url), wait_until="domcontentloaded")
             page.locator("#voice-mode").wait_for(state="attached", timeout=10000)
             metrics = page.evaluate("""() => ({
                 documentHeight: document.documentElement.scrollHeight,
@@ -32,6 +34,8 @@ def main():
                 raise AssertionError("Desktop dashboard does not fit the window")
             if width >= 801:
                 page.locator('button[data-view="chat"]').first.click()
+                if not page.locator('#character-stage').is_visible():
+                    raise AssertionError("SARA's avatar is hidden in the conversation view")
                 chat_height = page.evaluate("document.documentElement.scrollHeight")
                 chat_bottom = page.locator("#conversation-panel").bounding_box()["y"] + page.locator("#conversation-panel").bounding_box()["height"]
                 print(f"{width}x{height} chat view: scroll {chat_height}, chat bottom {chat_bottom:.1f}")

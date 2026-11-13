@@ -3,22 +3,25 @@ from datetime import datetime, timezone, timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, unquote, parse_qs
 from urllib.parse import quote_plus
-from .config import ROOT, PORT
+from .config import ROOT, PORT, OLLAMA_URL
 from .storage import now, read_memories, write_memories, read_pronunciations, write_pronunciations, read_apps, write_apps, read_capability_requests, write_capability_requests, read_reminders, write_reminders, read_conversations, append_conversation, read_tasks, write_tasks, read_events, write_events, read_recent_activity, log, LOG_FILE, MEMORY_LOCK, TASK_LOCK, EVENT_LOCK, PRONUNCIATION_LOCK, APP_LOCK, CAPABILITY_REQUEST_LOCK
 from .ai import ask, request_performance, performance_snapshot, warmup_ollama
 from .speech import prepare_speech
+from .scheduling import parse_schedule_time
+from . import scheduling_dialogue
 from .tools import open_url, open_browser_url, open_whatsapp_draft, open_app, open_email_draft
 from .desktop import type_text, press_hotkey, click_point
 from .browser_control import open_page as semantic_open_page, click_text as semantic_click_text, fill_text as semantic_fill_text, whatsapp_send, shutdown_browser
 from .capabilities import capability_snapshot
 from .policy import inspect_action, is_stopped, set_stopped
 from .console import trace as console_trace
+from .planner_validation import normalize_planner_time, planner_item_id
 from . import action_state
-from .intents import short_confirmation, is_action_status_question, is_capability_overview_question, memory_request_text, plan_notepad, unhandled_operation, capability_request, action_payload
+from .intents import short_confirmation, is_action_status_question, is_capability_overview_question, memory_request_text, plan_notepad, unhandled_operation, capability_request, action_payload, approved_salutation
 from .notes import create_notepad_note, read_note
 from .reminder_delivery import deliver_due_reminders, reminder_file_lock
 
-_health_cache = {"checked_at": 0.0, "ollama": False}
+_health_cache = {"checked_at": 0.0, "ollama": False, "model_available": False}
 _health_lock = threading.Lock()
 
 def ollama_health():
@@ -33,10 +36,69 @@ def ollama_health():
                 request = urllib.request.Request(os.getenv("SARA_OLLAMA_URL", "http://127.0.0.1:11434") + "/api/tags")
                 with urllib.request.urlopen(request, timeout=1) as response:
                     _health_cache["ollama"] = response.status == 200
+                    payload = json.loads(response.read().decode("utf-8")) if _health_cache["ollama"] else {}
+                    models = payload.get("models", []) if isinstance(payload, dict) else []
+                    installed = {
+                        str(item.get("name", item.get("model", ""))).strip()
+                        for item in models if isinstance(item, dict)
+                    }
+                    target = os.getenv("SARA_OLLAMA_MODEL", "llama3.2").strip()
+                    _health_cache["model_available"] = target in installed or (":" not in target and target + ":latest" in installed)
             except Exception:
                 _health_cache["ollama"] = False
+                _health_cache["model_available"] = False
             _health_cache["checked_at"] = time.monotonic()
     return _health_cache["ollama"]
+
+
+def ensure_local_ollama_service():
+    """Start the installed local Ollama service when SARA cannot reach it."""
+    try:
+        request = urllib.request.Request(OLLAMA_URL.rstrip("/") + "/api/tags")
+        with urllib.request.urlopen(request, timeout=1) as response:
+            if response.status == 200:
+                return "already running"
+    except Exception:
+        pass
+
+    parsed = urlparse(OLLAMA_URL)
+    if parsed.scheme != "http" or parsed.hostname not in {"127.0.0.1", "localhost", "::1"}:
+        return "not started (configured Ollama URL is not local)"
+    configured = os.getenv("OLLAMA_EXECUTABLE", "").strip()
+    local_app_data = os.getenv("LOCALAPPDATA", "")
+    candidates = [
+        shutil.which(configured) if configured else None,
+        configured if configured and os.path.isfile(configured) else None,
+        shutil.which("ollama"),
+        os.path.join(local_app_data, "Programs", "Ollama", "ollama.exe") if local_app_data else None,
+        os.path.join(local_app_data, "Ollama", "ollama.exe") if local_app_data else None,
+        os.path.join(os.getenv("ProgramFiles", r"C:\Program Files"), "Ollama", "ollama.exe"),
+        os.path.join(os.getenv("ProgramFiles(x86)", r"C:\Program Files (x86)"), "Ollama", "ollama.exe"),
+    ]
+    executable = next((os.path.abspath(path) for path in candidates if path and os.path.isfile(path)), None)
+    if not executable:
+        return "not started (Ollama CLI was not found)"
+    try:
+        subprocess.Popen(
+            [executable, "serve"],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+    except OSError as exc:
+        return f"start failed ({type(exc).__name__})"
+
+    deadline = time.monotonic() + 6
+    while time.monotonic() < deadline:
+        try:
+            request = urllib.request.Request(OLLAMA_URL.rstrip("/") + "/api/tags")
+            with urllib.request.urlopen(request, timeout=1) as response:
+                if response.status == 200:
+                    return "started"
+        except Exception:
+            time.sleep(0.25)
+    return "start requested but the service did not become reachable"
 
 def reminder_watcher():
     while True:
@@ -72,7 +134,14 @@ def system_summary():
     pending = sum(1 for item in reminders if item.get("status") == "pending")
     pending_tasks = sum(1 for item in read_tasks() if item.get("status") == "pending")
     upcoming_events = sum(1 for item in read_events() if item.get("status", "planned") == "planned")
-    return {"ollama": ollama_ready, "model": os.getenv("SARA_OLLAMA_MODEL", "llama3.2"), "desktop": desktop_ready, "screen": {"width": width, "height": height} if desktop_ready else None, "browser": browser_ready, "approved_memories": len(read_memories()), "pending_reminders": pending, "pending_tasks": pending_tasks, "upcoming_events": upcoming_events}
+    return {"ollama": ollama_ready, "ollama_model_available": _health_cache["model_available"], "model": os.getenv("SARA_OLLAMA_MODEL", "llama3.2"), "desktop": desktop_ready, "screen": {"width": width, "height": height} if desktop_ready else None, "browser": browser_ready, "approved_memories": len(approved_memory_items()), "pending_reminders": pending, "pending_tasks": pending_tasks, "upcoming_events": upcoming_events}
+
+
+def approved_memory_items(items=None):
+    """Return only explicitly approved personal facts for assistant use and counts."""
+    source = read_memories() if items is None else items
+    return [item for item in source if isinstance(item, dict) and item.get("approved") is True
+            and isinstance(item.get("text"), str) and item["text"].strip()]
 
 def agenda_snapshot():
     tasks = [item for item in read_tasks() if item.get("status") == "pending"]
@@ -88,9 +157,9 @@ def format_event_time(item):
 
 def agenda_reply(title="local agenda"):
     agenda = agenda_snapshot(); lines = [f"Boss, aapka {title}:"]
-    lines += [f"Tasks: {item.get('text', '')}" for item in agenda["tasks"][:8]] or ["Tasks: koi pending task nahi hai."]
-    lines += [f"Reminders: {item.get('text', '')}" for item in agenda["reminders"][:8]] or ["Reminders: koi pending reminder nahi hai."]
-    lines += [f"Events: {item.get('title', 'Untitled')} — {format_event_time(item)}" for item in agenda["events"][:8]] or ["Events: koi planned event nahi hai."]
+    lines += [f"Tasks: {item.get('text', '')}" for item in agenda["tasks"][:8]] or ["Tasks: कोई pending task नहीं है।"]
+    lines += [f"Reminders: {item.get('text', '')}" for item in agenda["reminders"][:8]] or ["Reminders: कोई pending reminder नहीं है।"]
+    lines += [f"Events: {item.get('title', 'Untitled')} — {format_event_time(item)}" for item in agenda["events"][:8]] or ["Events: कोई planned event नहीं है।"]
     return "\n".join(lines), agenda
 
 def ics_escape(value):
@@ -260,42 +329,45 @@ def search_workspace_text(query, limit=8):
     return results[:max(1, min(12, int(limit)))]
 
 def parse_due_at(message):
-    match = re.search(r"in\s+(\d+)\s+(minute|minutes|hour|hours)", message, re.I)
-    if match:
-        amount = int(match.group(1)); amount *= 60 if match.group(2).lower().startswith("minute") else 3600
-        return (datetime.now(timezone.utc) + timedelta(seconds=amount)).isoformat()
-    match = re.search(r"at\s+(\d{1,2})(?::(\d{2}))?\s*(am|pm)?", message, re.I)
-    if match:
-        hour = int(match.group(1)); minute = int(match.group(2) or 0); meridiem = (match.group(3) or "").lower()
-        if meridiem == "pm" and hour < 12: hour += 12
-        if meridiem == "am" and hour == 12: hour = 0
-        current = datetime.now().astimezone(); due = current.replace(hour=hour, minute=minute, second=0, microsecond=0)
-        if due <= current: due += timedelta(days=1)
-        return due.astimezone(timezone.utc).isoformat()
-    return None
+    return parse_schedule_time(message).due_at
 
 def parse_event_start(message):
-    """Parse a simple local event time from natural language into UTC ISO."""
-    text = str(message)
-    match = re.search(r"(?:on\s+)?(today|tomorrow|kal)?\s*(?:at\s+)?(\d{1,2})(?::(\d{2}))?\s*(am|pm)?", text, re.I)
-    if not match: return None
-    hour = int(match.group(2)); minute = int(match.group(3) or 0); meridiem = (match.group(4) or "").lower()
-    if meridiem == "pm" and hour < 12: hour += 12
-    if meridiem == "am" and hour == 12: hour = 0
-    if hour > 23 or minute > 59: return None
-    local = datetime.now().astimezone()
-    day_word = (match.group(1) or "today").lower()
-    if day_word in {"tomorrow", "kal"}: local += timedelta(days=1)
-    local = local.replace(hour=hour, minute=minute, second=0, microsecond=0)
-    if day_word == "today" and local <= datetime.now().astimezone(): local += timedelta(days=1)
-    return local.astimezone(timezone.utc).isoformat()
+    """Compatibility wrapper around the shared local-time parser."""
+    return parse_schedule_time(message).due_at
 
 def event_title(message):
-    match = re.match(r"(?:add|create|new|plan)\s+(?:an?\s+)?(?:event|meeting)\s+(.+)$|schedule\s+(?:(?:an?\s+)?(?:event|meeting)\s+)?(.+)$", message, re.I)
+    match = re.match(r"(?:add|create|new|plan)\s+(?:an?\s+)?(?:event|meeting)\s+(.+)$|schedule\s+(?:(?:an?\s+)?(?:event|meeting)\s+)?(.+)$|(?:मीटिंग|बैठक|इवेंट)\s+(?:जोड़ो\s+|रखो\s+|बनाओ\s+)?(.+)$|(.+(?:मीटिंग|बैठक|इवेंट))\s+(?:रखो|शेड्यूल\s+करो)$", message, re.I)
     if not match: return None
     title = next((group for group in match.groups() if group), "")
-    title = re.sub(r"\s+(?:on\s+)?(?:today|tomorrow|kal)?\s*(?:at\s+)?\d{1,2}(?::\d{2})?\s*(?:am|pm)?\s*$", "", title, flags=re.I).strip(" ,.-")
-    return title or None
+    if re.match(r"(?:an?\s+)?reminder\b", title, re.I): return None
+    parsed = parse_schedule_time(title)
+    if parsed.span:
+        start, end = parsed.span
+        title = title[:start] + " " + title[end:]
+    title = re.sub(r"(?:\s+(?:on|at|को|पर|रखो|बनाओ|शेड्यूल\s+करो))+$", "", title, flags=re.I)
+    return re.sub(r"\s+", " ", title).strip(" ,.-")
+
+
+def schedule_plan(kind, message, title=None, session=None):
+    """Prepare an exact schedule for review, or retain an expiring clarification."""
+    parsed = parse_schedule_time(message)
+    untimed = kind == "reminder" and bool(re.search(r"without (?:a )?time|no notification|bina (?:time|samay)|बिना (?:समय|अलर्ट)", message, re.I))
+    if parsed.status != "ready" and not untimed:
+        if session: scheduling_dialogue.remember(session, kind, message, title=title, span=parsed.span)
+        question = "कब याद दिलाऊँ?" if kind == "reminder" else "इसे कब schedule करूँ?"
+        reason = (parsed.message + " ") if parsed.status != "missing" else ""
+        return {"reply": reason + question + " जैसे ‘10 minute baad’ या ‘kal subah 9 baje’ बताइए।", "provider": kind + "-planner", "clarification": {"kind": kind, "reason": parsed.status}}
+    if session: scheduling_dialogue.clear(session)
+    stamp = now()
+    due_at = None if untimed else parsed.due_at
+    when = datetime.fromisoformat(due_at).astimezone().strftime("%d %b, %I:%M %p %Z") if due_at else "बिना automatic notification के"
+    if kind == "event":
+        item = {"id": stamp, "title": title, "start_at": due_at, "created": stamp, "status": "planned"}
+        action = {"type": "create_event", "event": item, "label": f"Schedule {title} at {when}"}
+    else:
+        item = {"id": stamp, "text": message, "due_at": due_at, "created": stamp, "status": "pending"}
+        action = {"type": "create_reminder", "reminder": item, "label": f"Save reminder: {when}"}
+    return {"reply": f"Boss, {when} के लिए {'event' if kind == 'event' else 'reminder'} तैयार है। पूरी जानकारी review करके Approve करें।", "provider": kind + "-planner", "requires_confirmation": True, "action": action}
 class Handler(BaseHTTPRequestHandler):
     def trace(self, message): console_trace(message)
     def stream_event(self, event):
@@ -321,6 +393,9 @@ class Handler(BaseHTTPRequestHandler):
             append_conversation({"time": now(), "question": "[Approved action] " + outcome["action"]["type"], "answer": result_text, "provider": "tool-result", "action_result": data["action_result"]})
             log("action_result", {**data["action_result"], "result": result_text})
         if urlparse(self.path).path == "/api/chat" and isinstance(data, dict) and data.get("reply"):
+            salutation = approved_salutation(read_memories())
+            reply = str(data["reply"])
+            data["reply"] = re.sub(r"^Boss,\s*", salutation + (" " if salutation else ""), reply, count=1, flags=re.I)
             if session and data.get("requires_confirmation") and data.get("action"):
                 proposal = action_state.propose(session, data["action"])
                 data["action"] = {**proposal["action"], "proposal_id": proposal["id"]}
@@ -389,11 +464,11 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/status": return self.send_json(200, {"name": "SARA", "mode": "Ollama/OpenAI/local-safe", "port": PORT})
         if path == "/api/health":
             ollama_ok = ollama_health()
-            return self.send_json(200, {"ok": True, "ollama": ollama_ok, "model": os.getenv("SARA_OLLAMA_MODEL", "llama3.2"), "natural_voice": bool(os.getenv("OPENAI_API_KEY"))})
+            return self.send_json(200, {"ok": True, "ollama": ollama_ok, "model_available": _health_cache["model_available"], "model": os.getenv("SARA_OLLAMA_MODEL", "llama3.2"), "natural_voice": bool(os.getenv("OPENAI_API_KEY"))})
         if path == "/api/performance": return self.send_json(200, performance_snapshot())
         if path == "/api/capabilities": return self.send_json(200, capability_snapshot())
         if path == "/api/policy":
-            return self.send_json(200, {"stopped": is_stopped(), "actions": {name: inspect_action(name) for name in ("create_reminder", "delete_reminder", "create_task", "complete_task", "delete_task", "create_event", "delete_event", "save_memory", "delete_memory", "save_pronunciation", "delete_pronunciation", "add_custom_app", "delete_custom_app", "save_capability_request", "delete_capability_request", "write_file", "delete_file", "open_app", "open_browser_url", "browser_click_text", "browser_fill", "type_text", "hotkey", "click_point", "email_draft", "whatsapp_send")}})
+            return self.send_json(200, {"stopped": is_stopped(), "actions": {name: inspect_action(name) for name in ("create_reminder", "delete_reminder", "create_task", "complete_task", "delete_task", "create_event", "delete_event", "save_memory", "approve_memory", "update_memory", "delete_memory", "save_pronunciation", "delete_pronunciation", "add_custom_app", "delete_custom_app", "save_capability_request", "delete_capability_request", "write_file", "delete_file", "open_app", "open_browser_url", "browser_click_text", "browser_fill", "type_text", "hotkey", "click_point", "email_draft", "whatsapp_send")}})
         if path == "/api/desktop/status":
             try:
                 import pyautogui
@@ -461,6 +536,8 @@ class Handler(BaseHTTPRequestHandler):
                 "/api/tools/open-url": "open_browser_url",
             }
             route_action = action_by_path.get(path)
+            if not route_action and path.startswith("/api/memories/") and path.endswith("/approve"): route_action = "approve_memory"
+            if not route_action and path.startswith("/api/memories/") and path.endswith("/update"): route_action = "update_memory"
             if not route_action and path.startswith("/api/memories/") and path.endswith("/delete"): route_action = "delete_memory"
             if not route_action and path.startswith("/api/pronunciations/") and path.endswith("/delete"): route_action = "delete_pronunciation"
             if not route_action and path.startswith("/api/apps/") and path.endswith("/delete"): route_action = "delete_custom_app"
@@ -486,7 +563,7 @@ class Handler(BaseHTTPRequestHandler):
                             return self.send_json(409, {"error": "Selected item changed after review."})
                     else:
                         reviewed = {key: value for key, value in data.items() if key not in {"session_id", "confirmed", "proposal_id", "type"}}
-                        if route_action in {"delete_memory", "delete_pronunciation", "delete_custom_app", "delete_capability_request", "delete_reminder", "delete_task", "complete_task", "delete_event"}: reviewed["id"] = path.split("/")[-2]
+                        if route_action in {"approve_memory", "delete_memory", "update_memory", "delete_pronunciation", "delete_custom_app", "delete_capability_request", "delete_reminder", "delete_task", "complete_task", "delete_event"}: reviewed["id"] = path.split("/")[-2]
                         proposal = action_state.propose(session, {**reviewed, "type": route_action})
                         proposal_id = proposal["id"]
                     try: action_state.begin(session, proposal_id)
@@ -526,58 +603,75 @@ class Handler(BaseHTTPRequestHandler):
                     pending = action_state.pending(session) if session else None
                     if confirmation == "cancel":
                         if session: action_state.cancel(session)
-                        return self.send_json(200, {"reply": "Pending action cancel kar diya; execute nahi hua." if pending else "Koi pending action nahi hai.", "provider": "action-state", "pending_cancelled": bool(pending)})
+                        schedule_cancelled = scheduling_dialogue.clear(session) if session else False
+                        return self.send_json(200, {"reply": "लंबित अनुरोध रद्द कर दिया; यह execute नहीं हुआ।" if pending or schedule_cancelled else "कोई लंबित कार्रवाई नहीं है।", "provider": "action-state", "pending_cancelled": bool(pending), "schedule_cancelled": schedule_cancelled})
                     if pending:
-                        return self.send_json(200, {"reply": "Wahi pending action ka review khol rahi hoon. Exact details check karke Approve karein; abhi execute nahi hua.", "provider": "action-state", "requires_confirmation": True, "review_pending": True, "action": {**pending["action"], "proposal_id": pending["id"]}})
-                    return self.send_json(200, {"reply": "Is dashboard mein koi pending action nahi hai. Batayein kaunsa app ya action chahiye; maine abhi kuch execute nahi kiya.", "provider": "action-state"})
+                        return self.send_json(200, {"reply": "वही pending action review के लिए खोल रही हूँ। पूरी जानकारी जाँचकर Approve करें; अभी action execute नहीं हुआ है।", "provider": "action-state", "requires_confirmation": True, "review_pending": True, "action": {**pending["action"], "proposal_id": pending["id"]}})
+                    return self.send_json(200, {"reply": "इस dashboard में कोई pending action नहीं है। बताइए, कौन-सा app या action चाहिए; मैंने अभी कुछ execute नहीं किया।", "provider": "action-state"})
+                resumed_schedule = scheduling_dialogue.resume(session, message) if session else None
+                if resumed_schedule:
+                    return self.send_json(200, schedule_plan(resumed_schedule["kind"], resumed_schedule["message"], title=resumed_schedule.get("title"), session=session))
                 if is_action_status_question(message):
                     evidence = action_state.context(session) if session else {"pending": None, "recent_outcomes": []}
                     outcomes = evidence["recent_outcomes"]
                     if evidence["pending"]:
-                        return self.send_json(200, {"reply": "Action abhi pending approval hai; execute nahi hua. Review action se exact details approve karein.", "provider": "action-state", "requires_confirmation": True, "action": {**action_state.pending(session)["action"], "proposal_id": evidence["pending"]["id"]}})
+                        return self.send_json(200, {"reply": "Action अभी approval के लिए pending है; execute नहीं हुआ। Review में जानकारी जाँचकर Approve करें।", "provider": "action-state", "requires_confirmation": True, "action": {**action_state.pending(session)["action"], "proposal_id": evidence["pending"]["id"]}})
                     last = outcomes[-1] if outcomes else None
                     result = (last or {}).get("result", {})
                     detail = result.get("result") if isinstance(result, dict) else None
-                    return self.send_json(200, {"reply": ("Last action: " + str(last["status"]) + ". " + str(detail or "No successful tool result was recorded.")) if last else "Is session mein koi executed action result nahi hai. Pehle ke AI chat claims execution ka proof nahi hain.", "provider": "action-state"})
+                    return self.send_json(200, {"reply": ("Last action: " + str(last["status"]) + ". " + str(detail or "No successful tool result was recorded.")) if last else "इस session में किसी action के execute होने का result नहीं है। पुरानी AI chat का दावा execution का प्रमाण नहीं है।", "provider": "action-state"})
                 capability_gap = capability_request(message)
                 if capability_gap:
                     registry_item = capability_snapshot().get(capability_gap["key"], {})
                     status = registry_item.get("status", "planned")
-                    status_text = "partial hai" if status == "partial" else ("planned hai" if status == "planned" else "available hai")
+                    status_text = "आंशिक रूप से उपलब्ध है" if status == "partial" else ("अभी योजना में है" if status == "planned" else "उपलब्ध है")
                     if status == "available" and capability_gap["key"] == "custom_app_shortcuts":
-                        reply = "Boss, custom app shortcuts ab available hain. Settings → App shortcuts mein naam aur full `.exe` path save karein; phir chat mein `open <naam>` ya `<naam> kholo` bolkar launch request dein. Har launch se pehle approval zaroori hai."
+                        reply = "Boss, custom app shortcuts अब उपलब्ध हैं। Settings → App shortcuts में नाम और पूरा `.exe` path save करें; फिर chat में `open <naam>` या `<naam> खोलें` बोलकर launch request दें। हर launch से पहले approval ज़रूरी है।"
                         return self.send_json(200, {"reply": reply, "provider": "capability-planner", "capability": capability_gap["key"], "status": status})
                     steps = "\n".join(f"{index}. {step}" for index, step in enumerate(capability_gap["steps"], 1))
-                    reply = (f"Boss, {capability_gap['title']} abhi SARA mein {status_text}; main isse bina aapki approval ke execute nahi karungi.\n"
+                    reply = (f"Boss, {capability_gap['title']} अभी SARA में {status_text}; आपकी approval के बिना मैं इसे execute नहीं करूँगी।\n"
                              f"Required access: {capability_gap['access']}.\n\nImplementation plan:\n{steps}\n\n"
-                             "Kya main ise SARA ke local feature-request list mein save karoon? Approval se request track hogi; feature khud install ya enable nahi hoga.")
-                    return self.send_json(200, {"reply": reply, "provider": "capability-planner", "capability": capability_gap["key"], "status": status, "implementation_plan": capability_gap["steps"], "required_access": capability_gap["access"], "requires_confirmation": True, "action": {"type": "save_capability_request", "title": capability_gap["title"], "description": message, "label": "Save this local feature request"}})
+                             "क्या मैं इसे SARA की local feature-request list में save करूँ? Approval से request track होगी; feature अपने-आप install या enable नहीं होगा।")
+                    return self.send_json(200, {"reply": reply, "provider": "capability-planner", "capability": capability_gap["key"], "status": status, "implementation_plan": capability_gap["steps"], "required_access": capability_gap["access"], "requires_confirmation": True, "action": {"type": "save_capability_request", "title": capability_gap["title"], "description": message, "capability_key": capability_gap["key"], "current_status": status, "required_access": capability_gap["access"], "implementation_plan": capability_gap["steps"], "label": "Save this local feature request"}})
                 if is_capability_overview_question(message):
                     registry = capability_snapshot()
                     def label(name): return name.replace("_", " ").title().replace("Api", "API").replace("Ui", "UI")
-                    available = [label(name) for name, item in registry.items() if item["status"] == "available"]
-                    partial = [(label(name), item.get("scope", "limited access")) for name, item in registry.items() if item["status"] == "partial"]
-                    planned = [label(name) for name, item in registry.items() if item["status"] == "planned"]
-                    ready_text = ", ".join(available[:10]) + (f", and {len(available) - 10} more in Settings" if len(available) > 10 else "")
-                    partial_text = "; ".join(f"{name}: {scope}" for name, scope in partial[:5]) or "None"
-                    planned_text = ", ".join(planned[:6]) + (f", and {len(planned) - 6} more in Settings" if len(planned) > 6 else "") or "None"
-                    reply = (f"Abhi available: {ready_text}.\n\nLimited: {partial_text}.\n\n"
-                             f"Not set up yet: {planned_text}. Settings → What SARA can do mein full current list hai."
-                             " Agar koi missing feature chahiye, uska naam batao; main access aur implementation plan bata sakti hoon.")
+                    available = [(label(name), item) for name, item in registry.items() if item["status"] == "available"]
+                    partial = [(label(name), item) for name, item in registry.items() if item["status"] == "partial"]
+                    planned = [(label(name), item) for name, item in registry.items() if item["status"] == "planned"]
+                    def summarize(rows, limit):
+                        shown = rows[:limit]
+                        descriptions = []
+                        for name, item in shown:
+                            default_scope = "not implemented or configured" if item.get("status") == "planned" else "available within its configured workflow"
+                            scope = str(item.get("scope", default_scope)).strip().rstrip(".")
+                            if len(scope) > 64:
+                                scope = scope[:63].rsplit(" ", 1)[0].rstrip(";, ") + "…"
+                            approval = "; approval required" if item.get("confirmation") else ""
+                            descriptions.append(f"{name} — {scope}{approval}")
+                        more = len(rows) - len(shown)
+                        return "; ".join(descriptions) + (f"; {more} more in Settings" if more else "") or "None"
+                    ready_text = summarize(available, 4)
+                    partial_text = summarize(partial, 3)
+                    planned_text = summarize(planned, 3)
+                    reply = (f"अभी उपलब्ध: {ready_text}.\n\nसीमित रूप से उपलब्ध: {partial_text}.\n\n"
+                             f"सेटअप बाकी: {planned_text}. पूरी सूची Settings → What SARA can do में है।"
+                             " कोई missing feature चाहिए तो उसका नाम बताइए; मैं access और implementation plan बता सकती हूँ।")
                     return self.send_json(200, {"reply": reply, "provider": "capability-overview", "capabilities": registry})
                 notepad = plan_notepad(message, read_memories())
                 if notepad: return self.send_json(200, notepad)
                 if re.search(r"(?:system|sara|environment)\s*(?:ka\s*)?(?:status|health|readiness)|status batao|how are you running", lower):
                     summary = system_summary()
-                    reply = (f"Boss, SARA status: Ollama {'ready' if summary['ollama'] else 'offline'} ({summary['model']}), "
+                    ollama_status = "ready" if summary["ollama"] and summary["ollama_model_available"] else ("service online, model not installed" if summary["ollama"] else "offline")
+                    reply = (f"Boss, SARA status: Ollama {ollama_status} ({summary['model']}), "
                              f"desktop control {'ready' if summary['desktop'] else 'unavailable'}, browser {'ready' if summary['browser'] else 'unavailable'}, "
                              f"{summary['approved_memories']} approved memories, {summary['pending_tasks']} pending tasks, {summary['pending_reminders']} pending reminders and {summary['upcoming_events']} planned events.")
                     return self.send_json(200, {"reply": reply, "provider": "system-status", "status": summary})
                 if re.search(r"(?:show|list|dikhao|batao).*(?:memory|memories)|(?:memory|memories).*(?:show|list|dikhao|batao)|what do you remember|tumhe kya yaad", lower):
-                    memories = read_memories()
+                    memories = approved_memory_items()
                     if not memories:
-                        return self.send_json(200, {"reply": "Boss, abhi koi approved memory save nahi hai.", "provider": "memory-list", "memories": []})
-                    reply = "Boss, meri approved memories:\n" + "\n".join(f"{index}. {item.get('text', '')}" for index, item in enumerate(memories, 1))
+                        return self.send_json(200, {"reply": "Boss, अभी कोई approved memory save नहीं है।", "provider": "memory-list", "memories": []})
+                    reply = "Boss, मेरी approved memories:\n" + "\n".join(f"{index}. {item.get('text', '')}" for index, item in enumerate(memories, 1))
                     return self.send_json(200, {"reply": reply, "provider": "memory-list", "memories": memories})
                 pronunciation_match = re.match(r"(?:pronounce|say|speak)\s+['\"]?(.+?)['\"]?\s+(?:as|like)\s+['\"]?(.+?)['\"]?[.!?]*$", message, re.I)
                 if pronunciation_match:
@@ -585,15 +679,15 @@ class Handler(BaseHTTPRequestHandler):
                     return self.send_json(200, {"reply": f"Boss, should I remember how to pronounce {word} in spoken replies?", "provider": "pronunciation-planner", "requires_confirmation": True, "action": {"type": "save_pronunciation", "word": word, "say_as": say_as, "label": f"say {word} as {say_as}"}})
                 memory_delete = re.search(r"(?:forget|delete|remove|bhool jao|hatao)\s+(?:memory|yaad)\s+(\d+)", lower)
                 if memory_delete:
-                    memories = read_memories(); index = int(memory_delete.group(1)) - 1
+                    memories = approved_memory_items(); index = int(memory_delete.group(1)) - 1
                     if index < 0 or index >= len(memories):
-                        return self.send_json(200, {"reply": "Boss, us number ki approved memory nahi mili.", "provider": "memory-list"})
+                        return self.send_json(200, {"reply": "Boss, उस number की approved memory नहीं मिली।", "provider": "memory-list"})
                     item = memories[index]
-                    return self.send_json(200, {"reply": f"Boss, kya main ye approved memory delete kar doon: {item.get('text', '')}?", "provider": "memory-planner", "requires_confirmation": True, "action": {"type": "delete_memory", "id": item.get("id"), "label": f"delete memory: {item.get('text', '')[:80]}"}})
+                    return self.send_json(200, {"reply": f"Boss, क्या मैं यह approved memory delete कर दूँ: {item.get('text', '')}?", "provider": "memory-planner", "requires_confirmation": True, "action": {"type": "delete_memory", "id": item.get("id"), "text": item["text"], "label": f"delete memory: {item.get('text', '')[:80]}"}})
                 if re.search(r"(?:show|list|dikhao|batao).*(?:calendar|events?|meetings?)|(?:calendar|events?|meetings?).*(?:show|list|dikhao|batao)|aaj ke events?", lower):
                     events = [item for item in read_events() if item.get("status", "planned") == "planned"]
                     if not events:
-                        return self.send_json(200, {"reply": "Boss, local calendar mein abhi koi planned event nahi hai.", "provider": "calendar-list", "events": []})
+                        return self.send_json(200, {"reply": "Boss, local calendar में अभी कोई planned event नहीं है।", "provider": "calendar-list", "events": []})
                     lines = []
                     for index, item in enumerate(sorted(events, key=lambda entry: entry.get("start_at", "")), 1):
                         try:
@@ -601,20 +695,20 @@ class Handler(BaseHTTPRequestHandler):
                         except (TypeError, ValueError):
                             when = item.get("start_at", "unscheduled")
                         lines.append(f"{index}. {item.get('title', 'Untitled')} — {when}")
-                    return self.send_json(200, {"reply": "Boss, aapke planned events:\n" + "\n".join(lines), "provider": "calendar-list", "events": events})
+                    return self.send_json(200, {"reply": "Boss, आपके planned events:\n" + "\n".join(lines), "provider": "calendar-list", "events": events})
                 event_cancel = re.search(r"(?:cancel|delete|remove|hatao)\s+(?:event|meeting)\s+(\d+)", lower)
                 if event_cancel:
                     events = sorted([item for item in read_events() if item.get("status", "planned") == "planned"], key=lambda entry: entry.get("start_at", ""))
                     index = int(event_cancel.group(1)) - 1
                     if index < 0 or index >= len(events):
-                        return self.send_json(200, {"reply": "Boss, us number ka planned event nahi mila.", "provider": "calendar-list"})
+                        return self.send_json(200, {"reply": "Boss, उस number का planned event नहीं मिला।", "provider": "calendar-list"})
                     item = events[index]
-                    return self.send_json(200, {"reply": f"Boss, kya main '{item.get('title', 'Untitled')}' ko cancel kar doon?", "provider": "calendar-planner", "requires_confirmation": True, "action": {"type": "delete_event", "id": item.get("id"), "label": f"cancel event: {item.get('title', '')[:80]}"}})
+                    return self.send_json(200, {"reply": f"Boss, क्या मैं '{item.get('title', 'Untitled')}' cancel कर दूँ?", "provider": "calendar-planner", "requires_confirmation": True, "action": {"type": "delete_event", "id": item.get("id"), "label": f"cancel event: {item.get('title', '')[:80]}"}})
                 event_text = event_title(message)
-                if event_text and parse_event_start(message):
-                    start_at = parse_event_start(message)
-                    event = {"id": now(), "title": event_text, "start_at": start_at, "created": now(), "status": "planned"}
-                    return self.send_json(200, {"reply": f"Boss, kya main '{event_text}' ko local calendar mein schedule kar doon?", "provider": "calendar-planner", "requires_confirmation": True, "action": {"type": "create_event", "event": event, "label": f"schedule event: {event_text[:80]}"}})
+                if event_text is not None:
+                    if not event_text:
+                        return self.send_json(200, {"reply": "Event का नाम भी बताइए, जैसे ‘schedule team sync kal shaam 5 baje’।", "provider": "event-planner", "clarification": {"kind": "event", "reason": "missing_title"}})
+                    return self.send_json(200, schedule_plan("event", message, title=event_text, session=session))
                 email_command = re.match(r"(?:draft|write|prepare|compose)\s+(?:an?\s+)?email\s+to\s+([^\s]+@[^\s]+)\s*(?:subject\s*[:,-]\s*(.+?))?\s*(?:body|message|content)\s*[:,-]\s*(.+)$", message, re.I)
                 if email_command:
                     recipient, subject, body = email_command.group(1), (email_command.group(2) or "SARA email draft"), email_command.group(3)
@@ -631,41 +725,41 @@ class Handler(BaseHTTPRequestHandler):
                 if re.search(r"(?:show|list|dikhao|batao).*(?:reminder|reminders)|(?:reminder|reminders).*(?:show|list|dikhao|batao)", lower):
                     reminders = [item for item in read_reminders() if item.get("status") in {"pending", "due"}]
                     if not reminders:
-                        return self.send_json(200, {"reply": "Boss, abhi koi pending reminder nahi hai.", "provider": "reminder-list", "reminders": []})
+                        return self.send_json(200, {"reply": "Boss, अभी कोई pending reminder नहीं है।", "provider": "reminder-list", "reminders": []})
                     lines = [f"{index}. {item.get('text', '')}" for index, item in enumerate(reminders, 1)]
-                    return self.send_json(200, {"reply": "Boss, aapke reminders:\n" + "\n".join(lines), "provider": "reminder-list", "reminders": reminders})
+                    return self.send_json(200, {"reply": "Boss, आपके reminders:\n" + "\n".join(lines), "provider": "reminder-list", "reminders": reminders})
                 reminder_delete = re.search(r"(?:delete|remove|hatao|cancel)\s+(?:reminder|yaad)\s+(\d+)", lower)
                 if reminder_delete:
                     reminders = [item for item in read_reminders() if item.get("status") in {"pending", "due"}]
                     index = int(reminder_delete.group(1)) - 1
                     if index < 0 or index >= len(reminders):
-                        return self.send_json(200, {"reply": "Boss, us number ka reminder nahi mila.", "provider": "reminder-list"})
+                        return self.send_json(200, {"reply": "Boss, उस number का reminder नहीं मिला।", "provider": "reminder-list"})
                     item = reminders[index]
-                    return self.send_json(200, {"reply": f"Boss, kya main ye reminder delete kar doon: {item.get('text', '')}?", "provider": "reminder-planner", "requires_confirmation": True, "action": {"type": "delete_reminder", "id": item.get("id"), "label": f"delete reminder: {item.get('text', '')[:80]}"}})
-                task_add = re.match(r"(?:add|create|new)\s+(?:a\s+)?task\s+(.+)$|task\s+(?:add|create)\s+(.+)$|(?:task|kaam)\s+(?:likho|banao)\s+(.+)$", message, re.I)
+                    return self.send_json(200, {"reply": f"Boss, क्या मैं यह reminder delete कर दूँ: {item.get('text', '')}?", "provider": "reminder-planner", "requires_confirmation": True, "action": {"type": "delete_reminder", "id": item.get("id"), "label": f"delete reminder: {item.get('text', '')[:80]}"}})
+                task_add = re.match(r"(?:add|create|new)\s+(?:a\s+)?task\s+(.+)$|task\s+(?:add|create)\s+(.+)$|(?:task|kaam)\s+(?:likho|banao|jodo)\s+(.+)$|(?:टास्क|काम)\s+(?:जोड़ो|जोड़ो|लिखो|बनाओ)\s+(.+)$", message, re.I)
                 if task_add:
                     task_text = next(group for group in task_add.groups() if group).strip()
-                    return self.send_json(200, {"reply": "Boss, kya main ye task local task list mein save kar doon?", "provider": "task-planner", "requires_confirmation": True, "action": {"type": "create_task", "text": task_text, "label": f"save task: {task_text[:80]}"}})
+                    return self.send_json(200, {"reply": "Boss, क्या मैं यह task local task list में save कर दूँ?", "provider": "task-planner", "requires_confirmation": True, "action": {"type": "create_task", "text": task_text, "label": f"save task: {task_text[:80]}"}})
                 if re.search(r"(?:show|list|dikhao|batao).*(?:tasks|to-do|todo|kaam)|(?:tasks|to-do|todo|kaam).*(?:show|list|dikhao|batao)", lower):
                     tasks = read_tasks()
                     pending = [item for item in tasks if item.get("status") == "pending"]
-                    reply = "Boss, pending tasks:\n" + "\n".join(f"{index + 1}. {item.get('text')}" for index, item in enumerate(pending)) if pending else "Boss, koi pending task nahi hai."
+                    reply = "Boss, pending tasks:\n" + "\n".join(f"{index + 1}. {item.get('text')}" for index, item in enumerate(pending)) if pending else "Boss, कोई pending task नहीं है।"
                     return self.send_json(200, {"reply": reply, "provider": "task-list", "tasks": pending})
                 task_delete = re.search(r"(?:delete|remove|hatao|cancel)\s+(?:task|kaam)\s+(\d+)", lower)
                 if task_delete:
                     pending = [item for item in read_tasks() if item.get("status") == "pending"]
                     index = int(task_delete.group(1)) - 1
                     if index < 0 or index >= len(pending):
-                        return self.send_json(200, {"reply": "Boss, us number ka pending task nahi mila.", "provider": "task-list"})
+                        return self.send_json(200, {"reply": "Boss, उस number का pending task नहीं मिला।", "provider": "task-list"})
                     item = pending[index]
-                    return self.send_json(200, {"reply": f"Boss, kya main ye task delete kar doon: {item.get('text', '')}?", "provider": "task-planner", "requires_confirmation": True, "action": {"type": "delete_task", "id": item.get("id"), "label": f"delete task: {item.get('text', '')[:80]}"}})
+                    return self.send_json(200, {"reply": f"Boss, क्या मैं यह task delete कर दूँ: {item.get('text', '')}?", "provider": "task-planner", "requires_confirmation": True, "action": {"type": "delete_task", "id": item.get("id"), "label": f"delete task: {item.get('text', '')[:80]}"}})
                 task_done = re.search(r"(?:complete|finish|done|pura|khatam)\s+task\s+(\d+)", lower)
                 if task_done:
                     pending = [item for item in read_tasks() if item.get("status") == "pending"]
                     index = int(task_done.group(1)) - 1
-                    if index < 0 or index >= len(pending): return self.send_json(200, {"reply": "Boss, us number ka pending task nahi mila.", "provider": "task-list"})
+                    if index < 0 or index >= len(pending): return self.send_json(200, {"reply": "Boss, उस number का pending task नहीं मिला।", "provider": "task-list"})
                     item = pending[index]
-                    return self.send_json(200, {"reply": f"Boss, kya main task complete mark kar doon: {item.get('text')}?", "provider": "task-planner", "requires_confirmation": True, "action": {"type": "complete_task", "id": item.get("id"), "text": item.get("text"), "label": f"complete task: {item.get('text', '')[:80]}"}})
+                    return self.send_json(200, {"reply": f"Boss, क्या मैं यह task complete mark कर दूँ: {item.get('text')}?", "provider": "task-planner", "requires_confirmation": True, "action": {"type": "complete_task", "id": item.get("id"), "text": item.get("text"), "label": f"complete task: {item.get('text', '')[:80]}"}})
                 if re.search(r"(?:workspace|project)\s*(?:ki\s*)?(?:files|file)\s*(?:dikhao|show|list|batao)?|list\s+(?:the\s+)?files", lower):
                     files = workspace_files()
                     shown = files[:80]
@@ -708,12 +802,11 @@ class Handler(BaseHTTPRequestHandler):
                         lines.extend(f"  {snippet['text']}" for snippet in item["snippets"])
                     reply = f"Boss, '{query}' ke sabse relevant workspace matches ye hain:\n" + "\n".join(lines)
                     return self.send_json(200, {"reply": reply, "provider": "workspace-search", "matches": matches})
-                if re.search(r"remind me|reminder|yaad dila", lower):
-                    reminder = {"id": now(), "text": message, "created": now(), "status": "pending", "due_at": parse_due_at(message)}
-                    return self.send_json(200, {"reply": "Boss, main is reminder ko local SARA reminders mein save kar sakti hoon. Save kar doon?", "provider": "reminder-planner", "requires_confirmation": True, "action": {"type": "create_reminder", "reminder": reminder}})
+                if re.search(r"remind\s+me|\breminder\b|yaad\s+dila(?:o|na|iye)?\b|याद\s+दिला(?:ना|ओ|इए)?|रिमाइंडर", lower):
+                    return self.send_json(200, schedule_plan("reminder", message, session=session))
                 memory_text = memory_request_text(message)
                 if memory_text:
-                    return self.send_json(200, {"reply": "Kya main ise future chats ke liye SARA ki approved memory mein save karoon?", "provider": "memory-planner", "requires_confirmation": True, "action": {"type": "save_memory", "text": memory_text, "label": f"save approved preference: {memory_text[:80]}"}})
+                    return self.send_json(200, {"reply": "क्या मैं इसे future chats के लिए SARA की approved memory में save करूँ?", "provider": "memory-planner", "requires_confirmation": True, "action": {"type": "save_memory", "text": memory_text, "label": f"save approved preference: {memory_text[:80]}"}})
                 if re.search(r"weather|mausam|temperature|tempreature", lower):
                     location_match = re.search(r"(?:in|at|for|mein)\s+([a-zA-Z][a-zA-Z .'-]{1,40})", message, re.I)
                     try:
@@ -812,13 +905,36 @@ class Handler(BaseHTTPRequestHandler):
                 text = str(data.get("text", "")).strip()
                 verdict = inspect_action("save_memory", bool(data.get("confirmed")))
                 if not verdict["allowed"]: return self.send_json(409, {**verdict, "text": text})
-                verdict = inspect_action("save_memory", bool(data.get("confirmed")))
-                if not verdict["allowed"]: return self.send_json(409, {**verdict, "text": text})
                 if not text or len(text) > 500: return self.send_json(400, {"error": "Memory must be 1–500 characters"})
                 item = {"id": now(), "text": text, "created": now(), "approved": True}
                 with MEMORY_LOCK:
                     items = read_memories(); items.append(item); write_memories(items)
                 log("memory_added", {"id": item["id"]}); return self.send_json(201, item)
+            if path.startswith("/api/memories/") and path.endswith("/update"):
+                ident = path.split("/")[-2]
+                if data.get("id") != ident: return self.send_json(409, {"error": "Memory ID changed after review. Review the update again."})
+                old_text = str(data.get("old_text", ""))
+                text = str(data.get("text", "")).strip()
+                if not text or len(text) > 500: return self.send_json(400, {"error": "Memory must be 1–500 characters"})
+                with MEMORY_LOCK:
+                    items = read_memories()
+                    selected = next((item for item in items if item.get("id") == ident), None)
+                    if not selected: return self.send_json(404, {"error": "Approved memory not found"})
+                    if selected.get("text") != old_text: return self.send_json(409, {"error": "This memory changed after review. Reload memories and review the update again."})
+                    selected["text"] = text; selected["updated"] = now(); write_memories(items)
+                log("memory_updated", {"id": ident}); return self.send_json(200, {"ok": True, "result": "Approved memory updated."})
+            if path.startswith("/api/memories/") and path.endswith("/approve"):
+                ident = path.split("/")[-2]
+                if data.get("id") != ident: return self.send_json(409, {"error": "Memory ID changed after review. Review the approval again."})
+                with MEMORY_LOCK:
+                    items = read_memories()
+                    selected = next((item for item in items if item.get("id") == ident), None)
+                    if not selected: return self.send_json(404, {"error": "Memory not found"})
+                    if selected.get("text") != data.get("text"): return self.send_json(409, {"error": "This memory changed after review. Reload memories and review the approval again."})
+                    if selected.get("approved") is True: return self.send_json(200, {"ok": True, "result": "This memory is already approved."})
+                    selected["approved"] = True; selected["approved_at"] = now(); selected["updated"] = selected["approved_at"]
+                    write_memories(items)
+                log("memory_approved", {"id": ident}); return self.send_json(200, {"ok": True, "result": "Memory approved for future replies."})
             if path == "/api/pronunciations":
                 word = str(data.get("word", "")).strip()
                 say_as = str(data.get("say_as", "")).strip()
@@ -841,18 +957,29 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/api/capability-requests":
                 title = str(data.get("title", "")).strip()
                 description = str(data.get("description", "")).strip()
+                capability_key = str(data.get("capability_key", "")).strip()[:100]
+                current_status = str(data.get("current_status", "planned")).strip()
+                required_access = str(data.get("required_access", "")).strip()
+                plan = data.get("implementation_plan", [])
                 verdict = inspect_action("save_capability_request", data.get("confirmed") is True)
                 if not verdict["allowed"]: return self.send_json(409, {**verdict, "title": title, "description": description})
                 if not title or len(title) > 120 or not description or len(description) > 1000:
                     return self.send_json(400, {"error": "A request title (up to 120 characters) and description (up to 1000 characters) are required."})
-                if any(ord(char) < 32 and char not in "\n\t" for char in title + description):
+                if len(required_access) > 1000 or not isinstance(plan, list) or len(plan) > 12 or any(not isinstance(step, str) or len(step) > 300 for step in plan):
+                    return self.send_json(400, {"error": "Required access or implementation plan is invalid or too long."})
+                if current_status not in {"available", "partial", "planned"}: current_status = "planned"
+                if any(ord(char) < 32 and char not in "\n\t" for char in title + description + required_access + "".join(plan)):
                     return self.send_json(400, {"error": "Control characters are not allowed in a feature request."})
                 with CAPABILITY_REQUEST_LOCK:
                     items = read_capability_requests()
                     existing = next((item for item in items if str(item.get("title", "")).casefold() == title.casefold() and str(item.get("description", "")).casefold() == description.casefold()), None)
                     if existing:
+                        if capability_key or required_access or plan:
+                            existing.update({"capability_key": capability_key, "current_status": current_status, "required_access": required_access, "implementation_plan": plan, "updated": now()})
+                            write_capability_requests(items)
+                            log("capability_request_updated", {"id": existing.get("id"), "title": title})
                         return self.send_json(200, {"ok": True, "result": "This feature request is already saved.", "request": existing})
-                    item = {"id": now(), "title": title, "description": description, "status": "requested", "created": now()}
+                    item = {"id": now(), "title": title, "description": description, "capability_key": capability_key, "current_status": current_status, "required_access": required_access, "implementation_plan": plan, "status": "requested", "created": now()}
                     items.append(item); write_capability_requests(items)
                 log("capability_request_saved", {"id": item["id"], "title": title})
                 return self.send_json(201, {"ok": True, "result": f"Saved feature request: {title}.", "request": item})
@@ -879,34 +1006,47 @@ class Handler(BaseHTTPRequestHandler):
                 log("custom_app_added", {"id": item["id"], "name": name})
                 return self.send_json(201, {"ok": True, "result": f"Saved app shortcut for {name}.", "app": item})
             if path == "/api/reminders":
-                text = str(data.get("text", "")).strip()
+                text = data.get("text", "")
                 verdict = inspect_action("create_reminder", bool(data.get("confirmed")))
                 if not verdict["allowed"]: return self.send_json(409, {**verdict, "text": text})
-                verdict = inspect_action("create_reminder", bool(data.get("confirmed")))
-                if not verdict["allowed"]: return self.send_json(409, {**verdict, "text": text})
-                if not text: return self.send_json(400, {"error": "Reminder text is required"})
-                item = {"id": data.get("id") or now(), "text": text, "created": now(), "status": "pending", "due_at": data.get("due_at")}
+                if not isinstance(text, str) or not text.strip(): return self.send_json(400, {"error": "Reminder text is required"})
+                try:
+                    due_at = normalize_planner_time(data.get("due_at"), optional=True)
+                    ident = planner_item_id(data.get("id"), now())
+                except ValueError as exc: return self.send_json(400, {"error": str(exc)})
+                item = {"id": ident, "text": text.strip(), "created": now(), "status": "pending", "due_at": due_at}
                 with reminder_file_lock():
-                    items = read_reminders(); items.append(item); write_reminders(items)
+                    items = read_reminders()
+                    if any(entry.get("id") == ident for entry in items): return self.send_json(409, {"error": "A reminder with this ID already exists. Request and review a new reminder."})
+                    items.append(item); write_reminders(items)
                 log("reminder_added", {"id": item["id"]}); return self.send_json(201, item)
             if path == "/api/tasks":
-                text = str(data.get("text", "")).strip()
-                if not text: return self.send_json(400, {"error": "Task text is required"})
+                text = data.get("text", "")
+                if not isinstance(text, str) or not text.strip(): return self.send_json(400, {"error": "Task text is required"})
                 if not data.get("confirmed"): return self.send_json(409, {"requires_confirmation": True, "risk": "This adds a local task.", "text": text})
-                item = {"id": data.get("id") or now(), "text": text, "created": now(), "status": "pending"}
+                try: ident = planner_item_id(data.get("id"), now())
+                except ValueError as exc: return self.send_json(400, {"error": str(exc)})
+                item = {"id": ident, "text": text.strip(), "created": now(), "status": "pending"}
                 with TASK_LOCK:
-                    tasks = read_tasks(); tasks.append(item); write_tasks(tasks)
+                    tasks = read_tasks()
+                    if any(entry.get("id") == ident for entry in tasks): return self.send_json(409, {"error": "A task with this ID already exists. Request and review a new task."})
+                    tasks.append(item); write_tasks(tasks)
                 log("task_added", {"id": item["id"]}); return self.send_json(201, item)
             if path == "/api/events":
-                title = str(data.get("title", "")).strip()
-                start_at = str(data.get("start_at", "")).strip()
+                title = data.get("title", "")
+                start_at = data.get("start_at")
                 verdict = inspect_action("create_event", bool(data.get("confirmed")))
                 if not verdict["allowed"]: return self.send_json(409, {**verdict, "title": title, "start_at": start_at})
-                if not title or not start_at: return self.send_json(400, {"error": "Event title and start time are required"})
-                if not data.get("confirmed"): return self.send_json(409, {"requires_confirmation": True, "risk": "This adds a local calendar event.", "title": title, "start_at": start_at})
-                item = {"id": data.get("id") or now(), "title": title, "start_at": start_at, "created": now(), "status": "planned"}
+                if not isinstance(title, str) or not title.strip(): return self.send_json(400, {"error": "Event title and start time are required"})
+                try:
+                    start_at = normalize_planner_time(start_at)
+                    ident = planner_item_id(data.get("id"), now())
+                except ValueError as exc: return self.send_json(400, {"error": str(exc)})
+                item = {"id": ident, "title": title.strip(), "start_at": start_at, "created": now(), "status": "planned"}
                 with EVENT_LOCK:
-                    events = read_events(); events.append(item); write_events(events)
+                    events = read_events()
+                    if any(entry.get("id") == ident for entry in events): return self.send_json(409, {"error": "An event with this ID already exists. Request and review a new event."})
+                    events.append(item); write_events(events)
                 log("event_added", {"id": item["id"], "title": title}); return self.send_json(201, {"ok": True, "result": f"Event scheduled: {title}", "event": item})
             if path.startswith("/api/events/") and path.endswith("/delete"):
                 ident = path.split("/")[-2]
@@ -963,8 +1103,14 @@ class Handler(BaseHTTPRequestHandler):
                 verdict = inspect_action("delete_memory", bool(data.get("confirmed")))
                 if not verdict["allowed"]: return self.send_json(409, verdict)
                 ident = path.split("/")[-2]
-                with MEMORY_LOCK: write_memories([m for m in read_memories() if m.get("id") != ident])
-                log("memory_deleted", {"id": ident}); return self.send_json(200, {"ok": True})
+                with MEMORY_LOCK:
+                    items = read_memories()
+                    selected = next((item for item in items if item.get("id") == ident), None)
+                    if selected is None: return self.send_json(404, {"error": "Memory not found. Reload memories before reviewing another deletion."})
+                    if data.get("id") != ident or data.get("text") != selected.get("text"):
+                        return self.send_json(409, {"error": "This memory changed after review. Reload memories and review the deletion again."})
+                    write_memories([item for item in items if item.get("id") != ident])
+                log("memory_deleted", {"id": ident}); return self.send_json(200, {"ok": True, "result": "Reviewed memory deleted."})
             if path.startswith("/api/pronunciations/") and path.endswith("/delete"):
                 verdict = inspect_action("delete_pronunciation", bool(data.get("confirmed")))
                 if not verdict["allowed"]: return self.send_json(409, verdict)
@@ -1078,6 +1224,7 @@ def run():
     threading.Thread(target=reminder_watcher, daemon=True, name="sara-reminder-watcher").start()
     server = ThreadingHTTPServer(("127.0.0.1", PORT), Handler)
     console_trace(f"Server starting at http://127.0.0.1:{PORT}")
+    console_trace(f"Ollama service: {ensure_local_ollama_service()}")
     console_trace(f"OPENAI_API_KEY={'present' if os.getenv('OPENAI_API_KEY') else 'missing'}")
     console_trace("Reminder watcher active")
     console_trace("Console colors enabled" if os.getenv("SARA_COLOR", "1").lower() not in {"0", "off", "false", "no"} else "Console colors disabled (SARA_COLOR=0)")

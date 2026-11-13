@@ -47,7 +47,7 @@ body{min-width:320px;background:radial-gradient(circle at 92% -10%,#2c2448 0,tra
   body[data-view="home"] .character-caption{bottom:12px}
   body[data-view="home"] .conversation,body[data-view="chat"] .conversation{min-height:0}
   body[data-view="home"] .messages,body[data-view="chat"] .messages{min-height:0;max-height:none;flex:1}
-  body[data-view="chat"] .main-column{min-height:0;grid-template-rows:minmax(0,1fr)}
+  body[data-view="chat"] .main-column{min-height:0;grid-template-rows:108px minmax(0,1fr);gap:12px}
   body[data-view="chat"] .chat-only .conversation{min-height:0}
   body[data-view="chat"] .chat-only .messages{max-height:none}
   body[data-view="home"] .day-column,body[data-view="chat"] .day-column{min-height:0;display:grid;grid-template-rows:minmax(0,1fr) auto;gap:12px}
@@ -76,3 +76,27 @@ body{min-width:320px;background:radial-gradient(circle at 92% -10%,#2c2448 0,tra
 }
 .pronunciation-form{display:grid;gap:8px;margin-top:14px}.pronunciation-form label{font-size:10px;color:var(--muted)}.pronunciation-form input{width:100%}.pronunciation-form .primary-button{justify-self:start;margin-top:5px}.pronunciation-list{padding-left:0;padding-right:0}
 .item-copy small{overflow-wrap:anywhere}
+.character-stage[data-state="speaking"].video-failed video{display:none}
+.character-stage[data-state="speaking"].video-failed .character-portrait{visibility:visible}
+.memory-card .memory-actions{display:flex;flex:0 0 auto;flex-direction:column;gap:8px}
+.memory-edit-form{display:grid;gap:8px;margin-top:12px}
+.memory-edit-actions{display:flex;gap:8px;flex-wrap:wrap}
+.memory-edit-actions button{font-size:10px}
+
+/* Keep SARA visible during conversation without using the full welcome hero. */
+body[data-view="chat"] .hero{height:108px;min-height:108px}
+body[data-view="chat"] .hero-copy{display:none}
+body[data-view="chat"] .character-stage{inset:0;width:100%;height:100%;opacity:1}
+body[data-view="chat"] .character-portrait,body[data-view="chat"] .character-stage video{left:12px;top:0;width:108px;height:108px}
+body[data-view="chat"] .character-halo{inset:12px auto 12px 24px;width:84px}
+body[data-view="chat"] .character-caption{left:132px;right:12px;top:50%;bottom:auto;max-width:calc(100% - 144px);transform:translateY(-50%);justify-content:flex-start;white-space:normal;font-size:11px;padding:8px 12px}
+@media(max-width:800px){
+  body[data-view="chat"] .main-column{gap:12px}
+  body[data-view="chat"] .chat-only .conversation{min-height:calc(100dvh - 300px)}
+}
+@media(max-width:560px){
+  body[data-view="chat"] .hero{height:96px;min-height:96px}
+  body[data-view="chat"] .character-portrait,body[data-view="chat"] .character-stage video{width:96px;height:96px}
+  body[data-view="chat"] .character-halo{inset:10px auto 10px 22px;width:76px}
+  body[data-view="chat"] .character-caption{left:116px;max-width:calc(100% - 128px);font-size:10px;padding:7px 9px}
+}

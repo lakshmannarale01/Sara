@@ -3,6 +3,7 @@ import os
 import tempfile
 from threading import Lock, RLock
 from datetime import datetime, timezone
+from uuid import uuid4
 from .config import DATA_DIR, MEMORY_FILE, PRONUNCIATION_FILE, APP_FILE, CAPABILITY_REQUEST_FILE, REMINDER_FILE, LOG_FILE, CONVERSATION_FILE, TASK_FILE, EVENT_FILE
 from .console import trace as console_trace
 DATA_DIR.mkdir(exist_ok=True)
@@ -81,6 +82,7 @@ def _write_json_atomic(path, items, limit=None):
             target.write(payload)
             target.flush()
             os.fsync(target.fileno())
+        _preserve_malformed_json(path)
         os.replace(temporary, path)
     except BaseException:
         try:
@@ -90,52 +92,85 @@ def _write_json_atomic(path, items, limit=None):
         raise
 
 
-def read_memories():
+def _preserve_malformed_json(path):
+    """Preserve unreadable records before a repaired list replaces their source.
+
+    The backup is published only after all original bytes are flushed. Any read
+    or backup failure aborts the caller's replacement so recovery cannot silently
+    destroy a file that it could not preserve.
+    """
     try:
-        items = json.loads(MEMORY_FILE.read_text(encoding="utf-8"))
-        return items if isinstance(items, list) else []
-    except (OSError, json.JSONDecodeError): return []
+        original = path.read_bytes()
+    except FileNotFoundError:
+        return
+    try:
+        records = json.loads(original.decode("utf-8"))
+        valid = isinstance(records, list) and all(isinstance(item, dict) for item in records)
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        valid = False
+    if valid:
+        return
+    backup = path.with_name(f"{path.name}.recovery-{uuid4().hex}.bak")
+    descriptor, temporary = tempfile.mkstemp(prefix=f".{path.name}.recovery.", suffix=".tmp", dir=path.parent)
+    try:
+        with os.fdopen(descriptor, "wb") as target:
+            target.write(original)
+            target.flush()
+            os.fsync(target.fileno())
+        os.replace(temporary, backup)
+    except BaseException:
+        try:
+            os.unlink(temporary)
+        except OSError:
+            pass
+        raise
+    console_trace(f"Local data recovery: preserved {path.name} as {backup.name} before updating it.")
+
+
+def _read_json_list(path):
+    """Return only valid top-level JSON lists; treat malformed local data as empty."""
+    try:
+        items = json.loads(path.read_text(encoding="utf-8"))
+    except OSError:
+        return []
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        console_trace(f"Local data warning: {path.name} contains invalid UTF-8 JSON; ignoring it.")
+        return []
+    if not isinstance(items, list):
+        console_trace(f"Local data warning: {path.name} must contain a JSON list; ignoring it.")
+        return []
+    valid = [item for item in items if isinstance(item, dict)]
+    if len(valid) != len(items):
+        console_trace(f"Local data warning: skipped malformed records in {path.name}.")
+    return valid
+
+
+def read_memories():
+    return _read_json_list(MEMORY_FILE)
 def write_memories(items): _write_json_atomic(MEMORY_FILE, items)
 def read_pronunciations():
-    try:
-        items = json.loads(PRONUNCIATION_FILE.read_text(encoding="utf-8"))
-        return items if isinstance(items, list) else []
-    except (OSError, json.JSONDecodeError): return []
+    return _read_json_list(PRONUNCIATION_FILE)
 def write_pronunciations(items):
     with PRONUNCIATION_LOCK: _write_json_atomic(PRONUNCIATION_FILE, items, limit=100)
 def read_apps():
-    try:
-        items = json.loads(APP_FILE.read_text(encoding="utf-8"))
-        return items if isinstance(items, list) else []
-    except (OSError, json.JSONDecodeError): return []
+    return _read_json_list(APP_FILE)
 def write_apps(items):
     with APP_LOCK: _write_json_atomic(APP_FILE, items, limit=100)
 def read_capability_requests():
-    try:
-        items = json.loads(CAPABILITY_REQUEST_FILE.read_text(encoding="utf-8"))
-        return items if isinstance(items, list) else []
-    except (OSError, json.JSONDecodeError): return []
+    return _read_json_list(CAPABILITY_REQUEST_FILE)
 def write_capability_requests(items):
     with CAPABILITY_REQUEST_LOCK: _write_json_atomic(CAPABILITY_REQUEST_FILE, items, limit=200)
-def read_reminders():
-    try: return json.loads(REMINDER_FILE.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError): return []
+def read_reminders(): return _read_json_list(REMINDER_FILE)
 def write_reminders(items): _write_json_atomic(REMINDER_FILE, items)
-def read_conversations():
-    try: return json.loads(CONVERSATION_FILE.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError): return []
+def read_conversations(): return _read_json_list(CONVERSATION_FILE)
 def append_conversation(item):
     with CONVERSATION_LOCK:
         items = read_conversations(); items.append(item)
         _write_json_atomic(CONVERSATION_FILE, items, limit=200)
-def read_tasks():
-    try: return json.loads(TASK_FILE.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError): return []
+def read_tasks(): return _read_json_list(TASK_FILE)
 def write_tasks(items):
     with TASK_LOCK: _write_json_atomic(TASK_FILE, items, limit=500)
-def read_events():
-    try: return json.loads(EVENT_FILE.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError): return []
+def read_events(): return _read_json_list(EVENT_FILE)
 def write_events(items):
     with EVENT_LOCK: _write_json_atomic(EVENT_FILE, items, limit=500)
 def log(event, detail):

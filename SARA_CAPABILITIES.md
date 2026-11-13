@@ -6,9 +6,9 @@
 
 - Ask questions by text or voice.
 - SARA aims to reply in the user's language and style, including Hindi/Hinglish.
-- Spoken replies are enabled by default, with automatic female system voice selection when available and a 1.15× default speed. The dashboard uses fast local Hinglish conversion for system speech. Settings diagnostics show the voice, language, and speed queued for the latest system reply, and warn if no Hindi voice was available. Settings also offers optional natural AI voice through the OpenAI API when configured; it uses API credits and is disclosed as AI-generated.
+- Spoken replies are enabled by default, with automatic female system voice selection when available and a 1.15× default speed. Hindi/Hinglish AI replies and common action, memory, calendar, task and capability responses use Devanagari Hindi while preserving English product and technical terms; the local speech lexicon also converts common Roman-Hindi tokens without another model call. Settings diagnostics show the voice, language, and speed queued for the latest system reply, and warn if no Hindi voice was available. Settings also offers optional natural AI voice through the OpenAI API when configured; it uses API credits and is disclosed as AI-generated.
 - SARA receives the live capability registry and should explain a missing feature, identify needed access where known, and offer to plan/implement it.
-- Ask `SARA, what can you do?` or `capabilities dikhao` for a direct summary from the live registry, grouped into available, limited, and not-yet-configured features.
+- Ask `SARA, what can you do?` or `capabilities dikhao` for a direct summary from the live registry, grouped by status and showing each feature's scope and whether approval is required.
 - If you ask for a missing feature (for example, `kya aap Google calendar sync bana doge?`), SARA returns a grounded implementation plan, required access, and the safe next command; she does not pretend that the feature already ran.
 - The dashboard launches as a standalone SARA app window by default, without normal browser tabs or an address bar; use `SARA_UI_MODE=browser` only when you want a regular browser window.
 - Say `SARA` to wake the voice session. Wake mode is enabled by default, remembered across dashboard reloads, and automatically re-arms after a reply or a short browser recognition timeout. The first browser microphone permission still needs to be allowed; some browsers also require one click on the dashboard before listening can start.
@@ -20,7 +20,7 @@
 - Notepad notes use one exact-content review, create a unique verified UTF-8 file and request Notepad to open that file. Approved-memory profile drafts do not invent personal facts. Saved-note previews remain accessible if app launch fails.
 - Short action follow-ups resolve session-scoped pending proposals and reopen review. Actual results appear in chat; stale, cancelled, modified and duplicate proposal execution is rejected.
 - Ask `SARA, system status batao` for a read-only check of Ollama, desktop control, browser runtime, approved memories, and pending reminders.
-- When a requested capability is missing, SARA explains its current status and required access, then offers to save the request locally. Approved requests appear under Settings & controls → Feature requests; saving only tracks the request and does not install or enable the feature.
+- When a requested capability is missing, SARA explains its current status and required access, then offers to save the request locally. Approved requests keep the capability key, current status, required access and implementation steps; review them under Settings & controls → Feature requests. Saving only tracks the request and does not install or enable the feature.
 
 ### Browser and web
 
@@ -87,6 +87,7 @@ The dashboard's Proactive suggestions toggle shows read-only suggestions from pe
 
 ### Learning and memory
 
+- Saved memories can be edited from the memory card; SARA shows the old and new text for approval before replacing it. The backend rejects an update if the saved text changed after review. Changes keep the original save time and record a new update time. Legacy records that are not approved stay out of replies until you explicitly approve the exact saved text.
 - SARA can use explicitly approved memories shown in the dashboard.
 - Replies use only records explicitly marked approved; relevant facts rank first and newer approved facts win ties. Unapproved/legacy records are left out of AI context.
 - Ordinary chat is not silently saved as long-term memory; add a preference or fact through the approved-memory control.

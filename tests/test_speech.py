@@ -1,9 +1,15 @@
 import unittest
+from unittest.mock import patch
 
 from sara_app.speech import PLAYBACK_MAX_CHARS, fallback_speech_text, prepare_speech
 
 
 class SpeechPreparationTests(unittest.TestCase):
+    def setUp(self):
+        pronunciations = patch("sara_app.storage.read_pronunciations", return_value=[])
+        self.pronunciations = pronunciations.start()
+        self.addCleanup(pronunciations.stop)
+
     def test_mixed_language_words_use_matching_voice_segments(self):
         result = prepare_speech("Mujhe aaj ka dashboard dikhao, please.")
         self.assertEqual(result["text"], "मुझे आज का dashboard दिखाओ, please.")
@@ -124,6 +130,35 @@ class SpeechPreparationTests(unittest.TestCase):
         result = prepare_speech("We hum while eating a banana.")
         self.assertEqual(result["text"], "We hum while eating a banana.")
         self.assertEqual(result["segments"], [{"text": result["text"], "lang": "en-IN"}])
+
+    def test_english_use_us_and_other_shared_words_do_not_create_hindi_context(self):
+        original = "Use Settings now. Let us do the work. Pa and Jo stand beside a fir tree."
+        result = prepare_speech(original)
+        self.assertEqual(result["text"], original)
+        self.assertTrue(all(item["lang"] == "en-IN" for item in result["playback"]))
+
+    def test_hindi_sentence_does_not_rewrite_preceding_english_instructions(self):
+        result = prepare_speech("Use the main window. Mujhe us file ka naam batao.")
+        self.assertEqual(result["text"], "Use the main window. मुझे उस file का नाम बताओ.")
+        self.assertEqual([item["lang"] for item in result["playback"]], ["en-IN", "hi-IN"])
+
+    def test_devanagari_sentence_does_not_rewrite_following_english(self):
+        original = "मुझे मदद चाहिए। Do this for me. Use the main menu."
+        result = prepare_speech(original)
+        self.assertEqual(result["text"], original)
+        self.assertEqual([item["lang"] for item in result["playback"]], ["hi-IN", "en-IN"])
+
+    def test_shared_pronouns_still_convert_in_a_roman_hindi_sentence(self):
+        result = prepare_speech("Mujhe us file ka naam batao aur use kal bhejo.")
+        self.assertEqual(result["text"], "मुझे उस file का नाम बताओ और उसे कल भेजो.")
+        self.assertEqual(result["playback"][0]["lang"], "hi-IN")
+
+    def test_roman_hindi_fir_and_pa_convert_with_local_hindi_signals(self):
+        self.assertEqual(prepare_speech("Mujhe fir se batao.")["text"], "मुझे फिर से बताओ.")
+        self.assertEqual(prepare_speech("Main kal aa pa raha hoon.")["text"], "मैं कल आ पा रहा हूँ.")
+
+    def test_english_pronoun_and_country_acronym_remain_distinct(self):
+        self.assertEqual(prepare_speech("Contact us in the US.")["text"], "Contact us in the United States.")
 
     def test_unicode_name_is_not_dropped(self):
         self.assertEqual(prepare_speech("Renée shared her résumé.")["text"], "Renée shared her résumé.")

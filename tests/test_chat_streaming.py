@@ -73,6 +73,8 @@ class ChatStreamingTests(unittest.TestCase):
         self.assertTrue(handler.close_connection)
         self.append.assert_called_once()
         self.activity.assert_called_once()
+        handler.trace.assert_any_call("Boss: Explain photosynthesis in two sentences.")
+        handler.trace.assert_any_call("SARA (ollama): Plants use sunlight.")
 
     def test_json_clients_receive_one_json_object_without_stream_callback(self):
         self.ask.side_effect = self.streaming_answer

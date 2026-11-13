@@ -58,14 +58,35 @@ HINDI_WORDS = {
     "namaskar": "नमस्कार", "maaf": "माफ़", "ruk": "रुक", "ruko": "रुको", "bas": "बस", "ek": "एक", "doosra": "दूसरा",
 }
 
+# Frequent Roman-Hindi forms missing from earlier replies. Keep the fallback
+# conservative so unknown names and English words are never transliterated by guess.
+HINDI_WORDS.update({
+    "jo": "जो", "joh": "जो", "jis": "जिस", "jise": "जिसे", "jisko": "जिसको",
+    "jahan": "जहाँ", "jaha": "जहाँ", "jahanse": "जहाँसे",
+    "aa": "आ", "aana": "आना", "aata": "आता", "aati": "आती", "aate": "आते",
+    "aaya": "आया", "aayi": "आई", "aaye": "आए", "aakar": "आकर",
+    "rahe": "रहे", "rahoge": "रहोगे", "rahega": "रहेगा", "rahegi": "रहेगी",
+    "us": "उस", "use": "उसे", "usse": "उससे", "un": "उन", "unka": "उनका",
+    "unki": "उनकी", "unke": "उनके", "unko": "उनको", "unhe": "उन्हें", "unhen": "उन्हें", "unse": "उनसे",
+    "pa": "पा", "pana": "पाना", "paya": "पाया", "paayi": "पाई", "paaye": "पाए",
+    "jawab": "जवाब", "naam": "नाम", "pasand": "पसंद", "agar": "अगर", "waise": "वैसे",
+    "wala": "वाला", "wali": "वाली", "wale": "वाले",
+    "hindi": "हिंदी", "hinglish": "हिंग्लिश", "me": "में", "do": "दो",
+    "gaya": "गया", "gayi": "गई", "gaye": "गए", "mila": "मिला", "mili": "मिली",
+    "karoon": "करूँ", "karun": "करूँ", "karoge": "करोगे", "dein": "दें", "doon": "दूँ", "dun": "दूँ",
+    "karke": "करके", "bolkar": "बोलकर", "khud": "खुद", "kholne": "खोलने", "kholein": "खोलें",
+    "batayein": "बताएं", "kijiye": "कीजिए", "isliye": "इसलिए", "wahi": "वही", "kaunsa": "कौनसा", "kaunsi": "कौनसी",
+    "bana": "बना", "banayein": "बनाएं", "karni": "करनी", "karna": "करना", "chhota": "छोटा", "chhoti": "छोटी", "chhote": "छोटे",
+})
+
 # These are genuine English words too. Convert them only in a Hindi context.
 CONTEXT_WORDS = {"main": "मैं", "par": "पर", "kar": "कर", "ho": "हो", "to": "तो", "ya": "या", "na": "ना"}
 HINDI_SIGNALS = {"aap", "mujhe", "mujhse", "kya", "kyun", "kaise", "hai", "hain", "hoon", "nahi", "nahin", "batao", "karo", "karna", "chahiye", "aaj", "mera", "meri", "tum", "hum", "namaste", "raha", "rahi", "dikhao", "samjhao"}
-AMBIGUOUS_WORDS = {"banana", "hum", "ab", "ha", "mai", "din"}
+AMBIGUOUS_WORDS = {"banana", "hum", "ab", "ha", "mai", "din", "me", "jo", "joh", "do", "us", "use", "pa", "fir"}
 HINDI_CONTEXT_WORDS = frozenset((HINDI_WORDS.keys() | HINDI_SIGNALS) - AMBIGUOUS_WORDS)
 ACRONYMS = {
     "UI": "user interface", "API": "application programming interface", "AI": "artificial intelligence",
-    "CPU": "processor", "GPU": "graphics processor", "URL": "web address", "HTML": "hypertext markup language",
+    "CPU": "processor", "GPU": "graphics processor", "URL": "web address", "US": "United States", "HTML": "hypertext markup language",
     "CSS": "style sheet", "JSON": "JavaScript object notation", "JS": "JavaScript", "SQL": "structured query language",
 }
 TOKEN = re.compile(r"[\u0900-\u097f\u200c\u200d]+|[A-Za-z]+(?:['’][A-Za-z]+)*|[^\W\d_]+|\d+(?:[.,]\d+)*|[^\w\s]|\s+", re.UNICODE)
@@ -110,8 +131,8 @@ SENTENCE_END = re.compile(r"[.!?।]+(?:[\"'”’)]*)(?=\s|$)")
 SHORT_ABBREVIATIONS = frozenset({"mr", "mrs", "ms", "dr", "prof", "vs", "st", "approx", "e.g", "i.e"})
 
 
-def _sentences(text):
-    """Split at prose sentence ends, preserving punctuation and common titles."""
+def _sentence_spans(text):
+    """Locate prose sentences while preserving punctuation and common titles."""
     start = 0
     for boundary in SENTENCE_END.finditer(text):
         ending = text[start:boundary.end()]
@@ -119,10 +140,15 @@ def _sentences(text):
         if last_word and last_word.group(1).lower().rstrip(".") in SHORT_ABBREVIATIONS:
             continue
         if ending.strip():
-            yield ending.strip()
+            yield start, boundary.end()
         start = boundary.end()
     if text[start:].strip():
-        yield text[start:].strip()
+        yield start, len(text)
+
+
+def _sentences(text):
+    for start, end in _sentence_spans(text):
+        yield text[start:end].strip()
 
 
 def _bounded_phrases(text):
@@ -216,13 +242,20 @@ def prepare_speech(text):
         pass
     if not cleaned:
         return {"text": "", "segments": [], "playback": []}
-    words = re.findall(r"[A-Za-z]+", cleaned.lower())
-    hindi_context = bool(DEVANAGARI.search(cleaned)) or bool(HINDI_CONTEXT_WORDS.intersection(words))
+    contexts = []
+    for start, end in _sentence_spans(cleaned):
+        sentence = cleaned[start:end]
+        words = re.findall(r"[A-Za-z]+", sentence.lower())
+        contexts.append((end, bool(DEVANAGARI.search(sentence)) or bool(HINDI_CONTEXT_WORDS.intersection(words))))
+    context_index = 0
     matches = list(TOKEN.finditer(cleaned))
     segments = []
     output = []
     leading = ""
     for match in matches:
+        while context_index < len(contexts) - 1 and match.start() >= contexts[context_index][0]:
+            context_index += 1
+        hindi_context = contexts[context_index][1] if contexts else False
         value = match.group()
         lang = None
         if DEVANAGARI.search(value):

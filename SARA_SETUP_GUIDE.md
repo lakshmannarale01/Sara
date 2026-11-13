@@ -53,7 +53,7 @@ If Ollama reports that port `11434` is already in use, it is already running; do
 ollama list
 ```
 
-SARA tries Ollama first, then optional OpenAI, then the local-safe fallback.
+When SARA starts, it checks whether the local Ollama service is reachable. If not, it starts `ollama serve` when the Ollama CLI is installed, then warms the configured model in the background. SARA does not download models automatically; install the default model once with `ollama run llama3.2`. It tries Ollama first, then optional OpenAI, then the local-safe fallback.
 
 ## 4. Optional OpenAI configuration
 
@@ -90,7 +90,7 @@ On a new laptop, log in again inside SARA's controlled Chromium profile for What
 2. `sara_server.py` starts the local HTTP server.
 3. SARA loads the dashboard at port `8765`.
 4. Ollama handles local chat when available.
-5. Voice input uses browser microphone permission and spoken replies are enabled by default. SARA chooses female-sounding system voices when available and defaults to 1.15× speed. System playback keeps a mixed Hindi/English sentence together rather than switching voices on each English word. Adjacent same-voice sentences merge into short passages; common technical terms use Hindi phonetics during Hindi playback. A local pronunciation lexicon prepares speech without another AI call; known acronyms expand and display Markdown/code blocks are cleaned. Unfamiliar names and Roman Hindi spellings still depend on the available voices and lexicon. In Settings, `Natural AI voice` is optional: it needs `OPENAI_API_KEY`, Internet and API credits. Use `Test voice` to hear the selected mode.
+5. Voice input uses browser microphone permission and spoken replies are enabled by default. SARA chooses female-sounding system voices when available and defaults to 1.15× speed. System playback keeps a mixed Hindi/English sentence together rather than switching voices on each English word. For Hindi/Hinglish replies, SARA asks the AI to write Hindi words in Devanagari while keeping technical English and product names in Latin script; common action, memory, calendar, task and capability replies follow the same pattern. Common Roman-Hindi words from older replies are converted locally; custom names can use a pronunciation rule. In Settings, `Natural AI voice` is optional: it needs `OPENAI_API_KEY`, Internet and API credits. Use `Test system voice` to hear the selected Windows voice.
 6. Browser and desktop actions return a confirmation request before execution.
 7. Chat questions and answers print in the terminal as `Boss:` and `SARA:` lines and are written to `sara_data/activity.jsonl`; saved turns appear in the chat panel after reload and in Recent activity. Ask `Sara ka system status batao` for a read-only readiness summary. Tasks persist in `sara_data/tasks.json` and can be added, completed, or deleted with confirmation, then used for a daily plan. Local events persist in `sara_data/events.json`; try `schedule team sync tomorrow at 5 pm` and confirm, then use `calendar dikhao` to list them.
 8. SARA can prepare a reviewable email draft with `draft email to name@example.com subject: Update body: ...`; it opens the default mail app only after confirmation and never presses Send automatically.
@@ -104,7 +104,7 @@ On a new laptop, log in again inside SARA's controlled Chromium profile for What
 16. `Notepad mein mere baare mein jo jaante ho likho` drafts only explicitly approved saved memories. With no approved personal facts, SARA says so instead of inventing a biography. Earlier AI chat claims such as "I opened Notepad" are not treated as tool evidence.
 17. If the selected voice mispronounces a word or name, add a local rule under Settings → Pronunciation guide or say `pronounce Kalpana as कल्पना` and approve it. The rule changes speech output only and can be removed from Settings.
 18. Add a Windows app under Settings → App shortcuts with a display name and the full path to its `.exe` (for example, `C:\Program Files\Example\Example.exe`). SARA stores this allowlist locally, offers the shortcut by name in chat (for example, `open Example`), and asks before every launch. It does not run command arguments or shell commands.
-19. If SARA says a capability is missing, it can explain the access and implementation outline, then offer to save your request. Approve it to keep the request under Settings → Feature requests; this tracks the idea locally but does not change or install SARA code by itself.
+19. If SARA says a capability is missing, it can explain the access and implementation outline, then offer to save your request. Approve it to keep the request under Settings → Feature requests; this tracks the idea locally but does not change or install SARA code by itself. When project-editing tools are available, SARA should be clear about whether it can help implement the feature in the current session.
 20. To find project guidance, ask `search project files for Kalpana` or `project files mein reminder dhoondo`. SARA searches bounded local text files and returns matching file names and lines. Runtime folders, `.env*`, and common key/credential files are excluded.
 21. Ask `SARA, what can you do?` or `capabilities dikhao` to see a live summary of available, limited, and planned features. Ask about a specific missing feature to see its access needs and implementation outline.
 
@@ -139,9 +139,9 @@ ollama list
 - Voice does not work: allow microphone permission and reload the dashboard.
 - Mic needs repeated clicks: click it once to start hands-free conversation. SARA pauses capture while replying and resumes automatically afterwards; direct follow-ups are accepted for 60 seconds **after playback finishes**. After that, say `Sara` again; the microphone stays armed. Temporary recognition/network errors retry automatically with a short backoff. Clicking the active mic explicitly stops hands-free mode; permission/device/language errors still need their indicated correction. Returning to the tab resumes an enabled session.
 - Voice pauses between words: system speech now uses sentence/phrase playback units, avoiding tiny language-switch utterances. A reply can still pause naturally at sentence or long-passage boundaries. The speech watchdog restores listening if the engine becomes idle without sending its completion event; it does not cut off speech based on a guessed text duration.
-- SARA does not speak or sounds robotic: open Settings, keep `Speak replies aloud` enabled, choose `Female system voice`, and click `Test voice`. SARA auto-picks a likely female voice, but the exact voice depends on Windows/Edge; diagnostics now show the language/voice and speed queued for each reply, including a warning when no Hindi voice is available. Select another installed voice if needed. `Natural AI voice` is available only with `OPENAI_API_KEY` and uses API credits. The voice speed slider defaults to 1.15×; old manually saved speeds remain unchanged. Browser audio can require one click after page load.
+- SARA does not speak or sounds robotic: open Settings, keep `Speak replies aloud` enabled, choose an installed voice such as Microsoft Kalpana, and click `Test system voice`. SARA remembers the selected voice by its URI and falls back to voice name/language if Windows or Edge changes that URI; if the voice is unavailable, diagnostics identify the fallback without erasing your choice. `Natural AI voice` is available only with `OPENAI_API_KEY` and uses API credits. The voice speed slider defaults to 1.15×; old manually saved speeds remain unchanged. Browser audio can require one click after page load.
 - Colorful terminal logs do not need a plugin. SARA now labels startup, API requests, Boss messages, SARA replies, actions, speech/TTS and errors with ANSI colors. Set `$env:SARA_COLOR = "0"` before `start_sara.bat` if you want plain text logs.
-- Hindi/Hinglish is spelled out: keep both Hindi and English Windows voices installed (for example Kalpana and Heera). Pure English passages use an English voice; mixed Hindi sentences use one Hindi voice with common technical pronunciation entries. Unknown names/spellings may still need a pronunciation entry or a more capable multilingual voice. `SARA` is spoken as `Sara`, and Markdown/code blocks are excluded from normal narration.
+- Hindi/Hinglish is spelled out: keep a Hindi Windows voice installed (for example Kalpana). New Hindi/Hinglish AI replies use Devanagari for Hindi words and Latin script for English terms, so the Hindi voice can pronounce the sentence as Hindi; older Roman-Hindi text still uses the local pronunciation lexicon. Unknown names/spellings can use a custom pronunciation entry. `SARA` is spoken as `Sara`, and Markdown/code blocks are excluded from normal narration.
 - Thinking is slow: restart SARA and allow its background model warmup. Local chat now streams text as it arrives and no longer waits for dashboard refresh after a reply. The default model is CPU-bound on this laptop; long replies and uncached context still take time. Use `/api/performance` to inspect measured first-token/total latency, or run `.\.venv\Scripts\python.exe tests\benchmark_latency.py` for a 32-token local test without saving a conversation. This benchmark still uses the laptop's current recent context locally; only timing/counts are printed.
 
 ## 10. Current integration boundaries
@@ -149,7 +149,7 @@ ollama list
 - Google/Outlook sync needs a provider OAuth app and user sign-in; until configured, use local events and `export calendar`.
 - Email opens a reviewable draft in the default mail handler. SARA does not send email directly.
 - WhatsApp send uses the separate SARA Chromium profile and always requires an explicit confirmation.
-- Reminder notifications are not a Windows background service yet. They are checked while SARA is running, so reminders may be delayed if the server is closed.
+- Reminder notifications run with SARA or the optional current-user scheduled worker. Enable that worker to check reminders while the server is closed; Windows sign-in is required.
 - Voice input/output and the animated character are browser features; wake mode requires the dashboard to remain open. It automatically re-arms after SARA replies, after short browser recognition timeouts, and when the tab becomes visible again. Browser microphone permission and its first user gesture are still required by browser privacy rules.
 - The optional OpenAI speech endpoint currently uses `gpt-4o-mini-tts`. OpenAI's documentation lists it for shutdown on January 6, 2027; move that optional mode to the Realtime API before then.
 - This remains a local web application, not a signed native desktop installer. Screen vision and realtime interruptible voice are future roadmap work.
@@ -175,4 +175,26 @@ Speed changes implemented: compact capability/memory prompts, incremental text o
 
 On November 4, 2026, a local 32-token test on the existing CPU-only `llama3.2` measured 30.49s total / 28.44s first text before optimization. With a compact new prompt and resident model it measured 12.28s / 10.48s; a further different prompt with a reusable prefix measured 2.29s / 0.38s. The initial run included 3.36s model load. These are small observed samples, not a promise for every question or external website.
 
-Further options: benchmark a smaller local model for speed/quality tradeoffs, investigate supported GPU acceleration for Intel Arc, add sentence-by-sentence streamed audio, and add user-editable name pronunciations. No model download, global driver change or paid voice mode was automatically enabled.
+Further options: benchmark a smaller local model for speed/quality tradeoffs, investigate supported GPU acceleration for Intel Arc, and add sentence-by-sentence streamed audio. User-editable name pronunciations are already available in Settings. No model download, global driver change or paid voice mode was automatically enabled.
+
+## 12. Offline verification
+
+Run the regression suite with temporary SARA data; your saved memories, conversations and planner files are not used:
+
+```powershell
+.\.venv\Scripts\python.exe tests\run_offline.py
+```
+
+With the installed Playwright Chromium runtime, browser checks can load only approved dashboard assets through intercepted requests. They need no HTTP server, actual microphone, speech provider, or desktop actions:
+
+```powershell
+.\.venv\Scripts\python.exe tests\ui_interaction_smoke.py fixture
+.\.venv\Scripts\python.exe tests\ui_action_workflow_smoke.py fixture
+.\.venv\Scripts\python.exe tests\ui_voice_session_smoke.py fixture
+.\.venv\Scripts\python.exe tests\ui_voice_preferences_smoke.py
+.\.venv\Scripts\python.exe tests\ui_smoke.py fixture
+```
+
+On November 13, 2026, 135 offline tests and these five browser checks passed. They cover saved history rendering, streamed chat, approval state, malformed-data recovery, approved-memory deletion, Hindi/English preparation, delayed voice restoration, pronunciation updates, avatar event timing and desktop layout. Microsoft Kalpana was present in the machine's Windows voice inventory. Physical pronunciation and speaker latency still require listening to `Test system voice` in the running app.
+
+If a damaged local JSON file needs repair, the next successful write preserves its original bytes alongside it as `filename.json.recovery-<id>.bak`. A filename-only console message identifies that backup.

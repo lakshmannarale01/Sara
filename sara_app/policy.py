@@ -9,7 +9,7 @@ ACTION_RISK = {
     "create_reminder": "medium", "delete_reminder": "high",
     "create_task": "low", "complete_task": "low", "delete_task": "high",
     "create_event": "medium", "delete_event": "high",
-    "save_memory": "medium", "delete_memory": "high",
+    "save_memory": "medium", "approve_memory": "medium", "update_memory": "high", "delete_memory": "high",
     "save_pronunciation": "low", "delete_pronunciation": "medium",
     "add_custom_app": "medium", "delete_custom_app": "medium",
     "save_capability_request": "low", "delete_capability_request": "medium",

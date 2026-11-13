@@ -10,6 +10,7 @@ import sys
 from urllib.parse import urlsplit
 
 from playwright.sync_api import expect, sync_playwright
+from browser_fixture import dashboard_fixture
 
 
 def main():
@@ -92,8 +93,9 @@ def main():
             else:
                 route.fulfill(json=defaults.get(path, {}))
 
+        target_url = dashboard_fixture(page, url)
         context.route("**/api/**", api)
-        page.goto(url)
+        page.goto(target_url)
         expect(page.locator("#send-button")).to_be_enabled()
 
         def send(message):

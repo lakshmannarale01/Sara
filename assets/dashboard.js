@@ -10,7 +10,7 @@ const prefs = {
 const state = {view:'home',busy:false,stopped:false,memories:[],pronunciations:[],apps:{built_in:[],custom:[]},capabilityRequests:[],agenda:{tasks:[],events:[],reminders:[]},
   speak:prefs.get('sara-auto-speak','true')==='true',proactive:prefs.get('sara-proactive','false')==='true',
   voiceMode:prefs.get('sara-voice-mode','system'),naturalVoiceAvailable:false,audio:null,audioUrl:null,audioController:null,
-  healthChecked:0,capabilitiesChecked:0,ready:false,utterances:[],speechStarted:false,
+  healthChecked:0,capabilitiesChecked:0,ready:false,historyLoaded:false,utterances:[],speechStarted:false,
   wake:prefs.get('sara-wake','true')==='true',wakeGestureReady:false,
   recognizing:false,recognitionStarting:false,recognitionBlocked:'',recognitionFailures:0,recognitionRetryAt:0,
   voiceConversation:false,wakeUntil:0,speaking:false,speechSequence:0,lastVoicePlayback:'',dialog:null,refreshing:false};
@@ -18,6 +18,7 @@ state.pendingAction=null;
 let recognition=null, recognitionTimer=null, recognitionStartTimer=null, followUpTimer=null, toastTimer=null, speechWatchdog=null;
 const FOLLOW_UP_MS=60000;
 const speechCache=new Map();
+let voiceListWaitCompleted=false;
 const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
 const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
 const wakeHelp=[...document.querySelectorAll('.settings-card .card-note')].find(node=>node.textContent.startsWith('Microphone starts'));
@@ -85,7 +86,7 @@ function setView(view, updateHash=true) {
   document.body.dataset.view=view;
   const chatView=['home','chat'].includes(view);
   $('#dashboard-grid').hidden=!chatView;$('#welcome-heading').hidden=view!=='home';
-  $('#hero').hidden=view!=='home';$('#starter-grid').hidden=view!=='home';
+  $('#hero').hidden=!chatView;$('#starter-grid').hidden=view!=='home';
   $('#dashboard-grid').classList.toggle('chat-only',view==='chat');
   $$('.detail-view').forEach(node=>{node.hidden=node.id!=='view-'+view;});
   $$('.nav-item').forEach(node=>{const active=node.dataset.view===view;node.classList.toggle('active',active);if(active)node.setAttribute('aria-current','page');else node.removeAttribute('aria-current');});
@@ -94,11 +95,11 @@ function setView(view, updateHash=true) {
   if(state.ready && ['day','memories','activity','settings'].includes(view))void refreshData();
 }
 function setCharacter(status) {
-  $('#character-stage').dataset.state=status;
+  const stage=$('#character-stage');stage.dataset.state=status;
   $('#character-status').textContent={ready:'Ready when you are',thinking:'Thinking it through',listening:'Listening to you',speaking:'Speaking',review:'Your approval matters'}[status] || 'Ready when you are';
   const video=$('#character-video');
-  if(status==='speaking' && !reducedMotion.matches) video.play().catch(()=>{$('#character-stage').dataset.state='ready';});
-  else video.pause();
+  if(status==='speaking' && !reducedMotion.matches){stage.classList.remove('video-failed');video.play().catch(()=>stage.classList.add('video-failed'));}
+  else {video.pause();stage.classList.remove('video-failed');}
 }
 function addMessage(text,who='sara',provider='',savedTime) {
   $('#chat-welcome')?.remove();
@@ -118,6 +119,7 @@ function setBusy(busy) {
 }
 async function submitMessage(message) {
   message=String(message || '').trim();
+  if(!state.historyLoaded){toast('Loading your saved conversation…');return;}
   if(!message || state.busy) return;
   setView('chat');$('#message').value='';resizeComposer();addMessage(message,'you');setBusy(true);
   let liveContent=null,streamed='';
@@ -198,6 +200,7 @@ $('#approve-action').addEventListener('click',async()=>{
     const {path,body}=actionRequest(pending.action);
     const result=await api(path,body,65000);
     if(result.ok===false || result.requires_confirmation){const error=new Error(result.result || result.error || 'Action did not complete.');error.details=result;throw error;}
+    if(['save_pronunciation','delete_pronunciation'].includes(pending.action.type))speechCache.clear();
     const resultText=showToolResult(result);
     settleProposal(pending.action.proposal_id,'Completed');state.pendingAction=null;
     toast(resultText);pending.executing=false;closeReview(true);await refreshData();
@@ -250,15 +253,37 @@ function actionButton(symbol,label,action,extra='') {
 }
 function renderMemories() {
   const preview=$('#memory-preview');preview.replaceChildren();
-  if(!state.memories.length) empty(preview,'Getting to know your preferences.','Tell SARA what helps you. Only the memories you approve are saved.');
-  state.memories.slice(-2).forEach(item=>preview.append(el('p','memory-preview-row',item.text)));
+  const approved=state.memories.filter(item=>item?.approved===true);
+  if(!approved.length) empty(preview,'Getting to know your preferences.','Tell SARA what helps you. Only the memories you approve are used in replies.');
+  approved.slice(-2).forEach(item=>preview.append(el('p','memory-preview-row',item.text)));
   const query=$('#memory-search').value.toLowerCase(),list=$('#memory-list');list.replaceChildren();
   const filtered=state.memories.filter(item=>String(item.text).toLowerCase().includes(query));
   if(!filtered.length) empty(list,query?'No matching memories.':'A fresh start.','Add a preference above, or ask SARA to remember something in chat.');
   filtered.forEach(item=>{
     const card=el('article','panel memory-card'),copy=el('div'),symbol=icon('memory');symbol.classList.add('accent-icon');
-    copy.append(el('p','',item.text),el('small','','Approved by you · '+dateText(item.created,'Saved locally')));
-    card.append(symbol,copy,actionButton('trash','Delete memory',{type:'delete_memory',id:item.id,text:item.text,label:'Forget this approved memory'}));list.append(card);
+    const approvalLabel=item.approved===true?'Approved by you · ':'Not approved · SARA does not use this · ';
+    copy.append(el('p','',item.text),el('small','',approvalLabel+dateText(item.updated||item.created,'Saved locally')));
+    const controls=el('div','memory-actions'),edit=el('button','quiet-button','Edit');edit.type='button';
+    edit.addEventListener('click',()=>{
+      if(copy.querySelector('.memory-edit-form'))return;
+      const form=el('div','memory-edit-form'),editor=document.createElement('textarea');
+      editor.value=item.text;editor.maxLength=500;editor.setAttribute('aria-label','Edit approved memory');
+      editor.style.cssText='width:100%;min-height:76px;padding:10px;border:1px solid #ffffff20;border-radius:8px;background:#11151f;color:inherit;resize:vertical';
+      const save=el('button','primary-button','Review update');save.type='button';
+      const cancel=el('button','quiet-button','Cancel');cancel.type='button';
+      const buttons=el('div','memory-edit-actions');buttons.append(save,cancel);form.append(editor,buttons);copy.append(form);editor.focus();
+      cancel.addEventListener('click',()=>form.remove());
+      save.addEventListener('click',async()=>{
+        const text=editor.value.trim();
+        if(!text){toast('Memory cannot be empty.');return;}
+        if(text===item.text){form.remove();return;}
+        const approved=await reviewAction({type:'update_memory',id:item.id,old_text:item.text,text,label_text:'Review the current and replacement memory before saving.'});
+        if(approved)form.remove();
+      });
+    });
+    if(item.approved!==true)controls.append(actionButton('check','Approve memory',{type:'approve_memory',id:item.id,text:item.text,label_text:'Approve this exact saved memory for future replies.'}));
+    controls.append(edit,actionButton('trash','Delete memory',{type:'delete_memory',id:item.id,text:item.text,label:'Forget this approved memory'}));
+    card.append(symbol,copy,controls);list.append(card);
   });
 }
 function ensurePronunciationSettings() {
@@ -326,7 +351,12 @@ function renderCapabilityRequests() {
   if(!state.capabilityRequests.length){empty(list,'No saved feature requests.','SARA can offer to keep track of a missing capability when you ask.');return;}
   state.capabilityRequests.slice().reverse().forEach(item=>{
     const row=el('div','item-row'),copy=el('div','item-copy');
-    copy.append(el('strong','',item.title),el('small','',item.description+' · '+(item.status||'requested')));
+    copy.append(el('strong','',item.title),el('small','',item.description+' · '+(item.status||'requested')+(item.current_status?' · capability '+item.current_status:'')));
+    if(item.required_access)copy.append(el('small','','Required access: '+item.required_access));
+    if(Array.isArray(item.implementation_plan)&&item.implementation_plan.length){
+      const details=el('details','capability-plan'),summary=el('summary','','Implementation plan'),steps=document.createElement('ol');
+      item.implementation_plan.forEach(step=>steps.append(el('li','',step)));details.append(summary,steps);copy.append(details);
+    }
     row.append(copy,actionButton('trash','Remove feature request',{type:'delete_capability_request',id:item.id,text:item.title,label:'Remove this saved feature request'}));list.append(row);
   });
 }
@@ -383,8 +413,11 @@ async function refreshData(initial=false) {
   if(initial || Date.now()-state.healthChecked>30000)requests.push(['/api/health',data=>{
       state.healthChecked=Date.now();
       state.naturalVoiceAvailable=Boolean(data.natural_voice);updateVoiceModeAvailability();
-      const node=$('#connection');node.replaceChildren(el('i'),document.createTextNode(data.ollama?'Local AI connected':'Local tools ready'));
-      node.classList.toggle('offline',!data.ollama);node.title=data.ollama?'Ollama service is reachable; model: '+data.model:'Ollama is not reachable. Chat may use configured cloud AI or the local fallback.';
+      const node=$('#connection'),modelReady=Boolean(data.model_available);
+      const label=data.ollama?(modelReady?'Local AI connected':'Ollama model missing'):'Local tools ready';
+      node.replaceChildren(el('i'),document.createTextNode(label));
+      node.classList.toggle('offline',!data.ollama || !modelReady);
+      node.title=data.ollama?(modelReady?'Ollama and model are ready: '+data.model:'Ollama is running, but '+data.model+' is not installed. Run `ollama run '+data.model+'` once.'):'Ollama is not reachable. Chat may use configured cloud AI or the local fallback.';
     }]);
   const outcomes=await Promise.allSettled(requests.map(async([path,render])=>render(await api(path))));
   const failures=outcomes.filter(item=>item.status==='rejected');
@@ -426,6 +459,11 @@ function watchSystemSpeech(sequence) {
   speechWatchdog=setInterval(()=>{
     if(sequence!==state.speechSequence || !state.speaking){clearInterval(speechWatchdog);speechWatchdog=null;return;}
     const synth=window.speechSynthesis;
+    if(!state.speechStarted && Date.now()-started>=15000){
+      state.lastVoicePlayback='System voice did not start within 15 seconds.';
+      $('#voice-diagnostics').textContent=state.lastVoicePlayback;
+      stopSpeech();finishSpeech(state.speechSequence,true);return;
+    }
     if(synth.paused && !document.hidden){synth.resume();return;}
     if(synth.speaking || synth.pending){idleSince=0;return;}
     if(!idleSince)idleSince=Date.now();
@@ -453,11 +491,34 @@ function preferredVoice(voices,hindi=false) {
   const candidates=hindi?voices.filter(voice=>voice.lang.toLowerCase().startsWith('hi')):voices.filter(voice=>voice.lang.toLowerCase().startsWith('en'));
   return [...candidates].sort((a,b)=>voiceScore(b,hindi)-voiceScore(a,hindi))[0] || null;
 }
-function reportSystemPlayback(utterances,rate) {
+function reportSystemPlayback(utterances,rate,label='system reply') {
   const routes=[...new Set(utterances.map(item=>`${item.lang || 'default'}: ${item.voice?.name || 'browser default'}`))];
   const noHindiVoice=utterances.some(item=>item.lang?.toLowerCase().startsWith('hi')&&!item.voice);
-  state.lastVoicePlayback=`Queued system reply · ${Number(rate).toFixed(2)}× · ${routes.join(' · ') || 'no speech passages'}${noHindiVoice?' · no explicit Hindi voice was available; browser fallback is in use.':''}`;
+  state.lastVoicePlayback=`Queued ${label} · ${Number(rate).toFixed(2)}× · ${routes.join(' · ') || 'no speech passages'}${noHindiVoice?' · no explicit Hindi voice was available; browser fallback is in use.':''}`;
   $('#voice-diagnostics').textContent=state.lastVoicePlayback;
+}
+function saveVoiceSelection(voice) {
+  prefs.set('sara-voice-uri',voice?.voiceURI || '');
+  prefs.set('sara-voice-name',voice?.name || '');
+  prefs.set('sara-voice-lang',voice?.lang || '');
+}
+function waitForSystemVoices(timeout=1400) {
+  const synth=window.speechSynthesis;
+  if(!synth?.getVoices)return Promise.resolve([]);
+  const read=()=>{try{return synth.getVoices() || [];}catch{return [];}};
+  const ready=read();if(ready.length){voiceListWaitCompleted=false;return Promise.resolve(ready);}
+  if(voiceListWaitCompleted)return Promise.resolve(ready);
+  return new Promise(resolve=>{
+    let timer=null,poll=null,settled=false;
+    const finish=()=>{
+      if(settled)return;settled=true;clearTimeout(timer);clearInterval(poll);
+      synth.removeEventListener?.('voiceschanged',finish);
+      const voices=read();voiceListWaitCompleted=!voices.length;resolve(voices);
+    };
+    synth.addEventListener?.('voiceschanged',finish);
+    poll=setInterval(()=>{if(read().length)finish();},100);
+    timer=setTimeout(finish,timeout);
+  });
 }
 async function speakNatural(text,sequence) {
   const controller=new AbortController();state.audioController=controller;
@@ -485,7 +546,7 @@ async function speakNatural(text,sequence) {
     if(state.audioController===controller)state.audioController=null;
   }
 }
-async function speak(text, force=false) {
+async function speak(text, force=false, systemOnly=false) {
   if(!state.speak && !force) return;
   stopSpeech();const sequence=state.speechSequence;
   const short=String(text).slice(0,1200);
@@ -498,32 +559,39 @@ async function speak(text, force=false) {
   }
   if(sequence!==state.speechSequence)return;
   if(!prepared.text?.trim()){finishSpeech(sequence);return;}
-  if(state.voiceMode==='natural' && state.naturalVoiceAvailable && await speakNatural(prepared.text,sequence))return;
+  if(!systemOnly && state.voiceMode==='natural' && state.naturalVoiceAvailable && await speakNatural(prepared.text,sequence))return;
   if(sequence!==state.speechSequence)return;
   if(!('speechSynthesis' in window)) {toast('Speech output is not supported in this browser.');finishSpeech(sequence,true);return;}
-  const voices=window.speechSynthesis.getVoices(),segments=(prepared.playback || [{text:prepared.text,lang:/[\u0900-\u097f]/.test(prepared.text)?'hi-IN':'en-IN'}]).filter(item=>item.text.trim());
+  const voices=await waitForSystemVoices();
+  if(sequence!==state.speechSequence)return;
+  populateVoices();
+  const segments=(prepared.playback || [{text:prepared.text,lang:/[\u0900-\u097f]/.test(prepared.text)?'hi-IN':'en-IN'}]).filter(item=>item.text.trim());
   state.utterances=segments.map((segment,index)=>{
     const utterance=new SpeechSynthesisUtterance(segment.text),hindi=segment.lang==='hi-IN';
     utterance.voice=preferredVoice(voices,hindi);utterance.lang=utterance.voice?.lang || segment.lang;
     utterance.rate=Number($('#voice-rate').value);utterance.pitch=1.04;
     utterance.onstart=()=>{if(sequence===state.speechSequence){state.speechStarted=true;$('#voice-status').textContent='Speaking'+(utterance.voice?.name?' · '+utterance.voice.name:'');setCharacter('speaking');}};
     utterance.onend=()=>{if(index===segments.length-1)finishSpeech(sequence);};
-    utterance.onerror=()=>{if(sequence===state.speechSequence){state.lastVoicePlayback=`System voice error · ${utterance.voice?.name || utterance.lang}`;$('#voice-diagnostics').textContent=state.lastVoicePlayback;toast('Browser voice failed. Open Settings → Test voice and select a system voice.');stopSpeech();finishSpeech(state.speechSequence,true);}};
+    utterance.onerror=()=>{if(sequence===state.speechSequence){state.lastVoicePlayback=`System voice error · ${utterance.voice?.name || utterance.lang}`;$('#voice-diagnostics').textContent=state.lastVoicePlayback;toast('Browser voice failed. Open Settings → Test system voice and select an installed system voice.');stopSpeech();finishSpeech(state.speechSequence,true);}};
     return utterance;
   });
-  reportSystemPlayback(state.utterances,$('#voice-rate').value);
+  reportSystemPlayback(state.utterances,$('#voice-rate').value,systemOnly?'system voice test':'system reply');
   try {window.speechSynthesis.resume();for(const utterance of state.utterances)window.speechSynthesis.speak(utterance);watchSystemSpeech(sequence);} catch {state.lastVoicePlayback='System speech failed to start.';$('#voice-diagnostics').textContent=state.lastVoicePlayback;toast('Could not start browser voice output.');stopSpeech();finishSpeech(state.speechSequence,true);}
 }
 function populateVoices() {
   const voices=window.speechSynthesis?.getVoices() || [],select=$('#voice-select');
-  const saved=select.value || prefs.get('sara-voice-uri');
+  const savedUri=select.value || prefs.get('sara-voice-uri'),savedName=prefs.get('sara-voice-name'),savedLang=prefs.get('sara-voice-lang');
   select.replaceChildren(new Option('SARA picks the best available voice',''));
   [...voices].sort((a,b)=>voiceScore(b)-voiceScore(a)).forEach(voice=>select.add(new Option(voice.name+' ('+voice.lang+')',voice.voiceURI)));
-  const savedVoice=voices.find(voice=>voice.voiceURI===saved);
-  select.value=savedVoice&&voiceScore(savedVoice)>=0?saved:'';
-  if(savedVoice&&select.value!==saved)prefs.set('sara-voice-uri','');
+  const savedVoice=voices.find(voice=>voice.voiceURI===savedUri)
+    || (savedName?voices.find(voice=>voice.name.toLowerCase()===savedName.toLowerCase() && (!savedLang || voice.lang.toLowerCase()===savedLang.toLowerCase())):null)
+    || (savedName?voices.find(voice=>voice.name.toLowerCase()===savedName.toLowerCase()):null)
+    || (!savedName && savedUri?voices.find(voice=>voice.name && savedUri.toLowerCase().includes(voice.name.toLowerCase())):null);
+  select.value=savedVoice?.voiceURI || '';
+  if(savedVoice)saveVoiceSelection(savedVoice);
   const recommended=preferredVoice(voices);
-  $('#voice-diagnostics').textContent=voices.length+' system voices · '+(recommended?'SARA picks '+recommended.name:'No voice detected')+' · '+(voices.some(v=>v.lang.toLowerCase().startsWith('hi'))?'Hindi voice available':'Hindi voice unavailable')+(state.lastVoicePlayback?' · '+state.lastVoicePlayback:'');
+  const missingSavedVoice=voices.length && !savedVoice && (savedName || savedUri) ? ' · Saved voice unavailable: '+(savedName || savedUri)+'; using a fallback' : '';
+  $('#voice-diagnostics').textContent=voices.length+' system voices · '+(savedVoice?'Selected '+savedVoice.name:recommended?'SARA picks '+recommended.name:'No voice detected')+' · '+(voices.some(v=>v.lang.toLowerCase().startsWith('hi'))?'Hindi voice available':'Hindi voice unavailable')+missingSavedVoice+(state.lastVoicePlayback?' · '+state.lastVoicePlayback:'');
 }
 function updateVoiceModeAvailability() {
   const mode=$('#voice-mode');if(!mode)return;
@@ -563,7 +631,7 @@ function listeningStatus() {
   return Date.now()<state.wakeUntil?'Hands-free ready · you can reply directly':'Wake mode ready · say “Sara”';
 }
 function canListen() {
-  return Boolean(SpeechRecognition && state.wake && state.wakeGestureReady && !state.recognitionBlocked && !state.busy && !state.speaking && !state.dialog && !document.hidden);
+  return Boolean(SpeechRecognition && state.historyLoaded && state.wake && state.wakeGestureReady && !state.recognitionBlocked && !state.busy && !state.speaking && !state.dialog && !document.hidden);
 }
 function scheduleWake(delay=250) {
   clearTimeout(recognitionTimer);recognitionTimer=null;
@@ -677,8 +745,10 @@ $('#retry-refresh').addEventListener('click',()=>refreshData());
 $('#speaker-toggle').addEventListener('click',()=>setSpeakPreference(!state.speak));
 $('#auto-speak').addEventListener('change',event=>setSpeakPreference(event.target.checked));
 $('#stop-speech').addEventListener('click',()=>{stopSpeech();openFollowUpWindow();scheduleWake();});
-$('#test-voice').addEventListener('click',()=>speak('Namaste! Main SARA hoon. Aaj hum kya karein?',true));
-$('#voice-select').addEventListener('change',event=>prefs.set('sara-voice-uri',event.target.value));
+const testVoiceButton=$('#test-voice');
+testVoiceButton.textContent='Test system voice';
+testVoiceButton.addEventListener('click',()=>speak('नमस्ते, मैं सारा हूँ। आपकी आवाज़ और बोलने की गति कैसी लग रही है? This is a short English voice check.',true,true));
+$('#voice-select').addEventListener('change',event=>{const voice=window.speechSynthesis?.getVoices().find(item=>item.voiceURI===event.target.value);saveVoiceSelection(voice||null);});
 $('#voice-rate').addEventListener('input',event=>{$('#rate-value').textContent=Number(event.target.value).toFixed(2)+'×';prefs.set('sara-voice-rate',event.target.value);});
 $('#recognition-language').addEventListener('change',event=>{prefs.set('sara-recognition-language',event.target.value);pauseRecognition();if(state.recognitionBlocked==='language-not-supported')state.recognitionBlocked='';state.recognitionRetryAt=0;scheduleWake();});
 $('#mic-button').addEventListener('click',()=>{
@@ -705,7 +775,7 @@ $('#rate-value').textContent=Number($('#voice-rate').value).toFixed(2)+'×';
 $('#recognition-language').value=['en-IN','hi-IN','en-US'].includes(prefs.get('sara-recognition-language'))?prefs.get('sara-recognition-language'):'en-IN';
 initializeVoiceModeControl();
 $('#proactive-toggle').checked=state.proactive;setSpeakPreference(state.speak);setWakePreference(state.wake,false);populateVoices();
-window.speechSynthesis?.addEventListener('voiceschanged',populateVoices);
+window.speechSynthesis?.addEventListener('voiceschanged',()=>{voiceListWaitCompleted=false;populateVoices();});
 if(!SpeechRecognition){$('#mic-button').disabled=true;$('#wake-toggle').disabled=true;$('#voice-status').textContent='Voice input unavailable in this browser · text chat is ready';}
 ensurePronunciationSettings();
 ensureAppSettings();
@@ -730,7 +800,9 @@ navigator.permissions?.query({name:'microphone'}).then(permission=>{
 $('#send-button').disabled=true;
 state.ready=true;
 void refreshData(true);
-try {for(const item of await api('/api/conversations',undefined,2500)){addMessage(item.question||'','you','',item.time);addMessage(item.answer||'','sara',item.provider,item.time);}} catch { /* History must not hold chat behind health checks. */ }
+try {for(const item of await api('/api/conversations',undefined,2500)){addMessage(item.question||'','you','',item.time);addMessage(item.answer||'','sara',item.provider,item.time);}}
+catch {toast('Saved conversation could not load; new messages are still available.');}
+state.historyLoaded=true;scheduleWake();
 $('#send-button').disabled=false;
 void api('/api/action-state?session_id='+encodeURIComponent(SESSION_ID)).then(data=>{if(data.pending && !state.pendingAction && !state.busy){const action={...data.pending.action,proposal_id:data.pending.id};attachProposal(addMessage('Is session ka ek action abhi approval ke liye pending hai.','sara','action-state'),action);}}).catch(()=>{});
 if(state.wake && !state.recognitionBlocked && !state.recognizing) {$('#voice-status').textContent=state.wakeGestureReady?listeningStatus():'Wake mode ready · tap microphone once to begin';scheduleWake();}

@@ -7,6 +7,7 @@ No real microphone, AI service, or saved conversation is used.
 import sys
 
 from playwright.sync_api import sync_playwright
+from browser_fixture import dashboard_fixture
 
 
 def main():
@@ -68,7 +69,7 @@ def main():
                 route.fulfill(json=defaults.get(path, {}))
 
         page.route("**/api/**", api)
-        page.goto(url)
+        page.goto(dashboard_fixture(page, url))
         page.locator("#send-button:not([disabled])").wait_for()
         page.clock.pause_at("2026-11-04T07:00:00Z")
 

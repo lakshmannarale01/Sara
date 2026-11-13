@@ -2,6 +2,25 @@
 import re
 
 
+def approved_salutation(memories):
+    """Return the newest approved name preference, or the neutral default."""
+    approved = [item for item in memories if isinstance(item, dict) and item.get("approved") is True]
+    banned = set()
+    approved.sort(key=lambda item: str(item.get("updated", item.get("created", item.get("id", "")))), reverse=True)
+    for item in approved:
+        text = str(item.get("text", ""))
+        preferred = re.search(r"\bpreferred name:\s*([^.;\n]+)", text, re.I)
+        if preferred:
+            name = preferred.group(1).strip().strip(" '\"")
+            if (name and len(name) <= 40 and not re.search(r"[\r\n,<>]", name)
+                    and name.casefold() not in banned):
+                return name + ","
+        avoided = re.search(r"\bdo not call the user\s+([^.;\n]+)", text, re.I)
+        if avoided:
+            banned.add(avoided.group(1).strip().casefold())
+    return "" if "boss" in banned else "Boss,"
+
+
 def short_confirmation(message):
     value = re.sub(r"[.!?,।]+", " ", str(message).lower())
     value = re.sub(r"\s+", " ", value).strip()
@@ -169,16 +188,16 @@ def capability_request(message):
     if not (asks_to_build and describes_gap):
         return None
     if re.search(r"custom app|app shortcut|register.*app", text):
-        return {"key": "custom_app_shortcuts", "title": "custom Windows app shortcuts", "access": "Settings mein app ka naam aur uski absolute `.exe` path; SARA har launch se pehle approval maangti hai", "steps": ["Settings → App shortcuts mein app name aur `.exe` path add karna", "chat mein saved name se app kholne ki request dena", "har launch se pehle review approve karna"]}
+        return {"key": "custom_app_shortcuts", "title": "custom Windows app shortcuts", "access": "Settings में app का नाम और उसका absolute `.exe` path; SARA हर launch से पहले approval माँगती है", "steps": ["Settings → App shortcuts में app का नाम और `.exe` path जोड़ें", "chat में saved नाम से app खोलने की request दें", "हर launch से पहले review approve करें"]}
     if re.search(r"email|mail|gmail|send mail", text):
-        return {"key": "email", "title": "direct email integration", "access": "mail provider/API credentials aur send permission", "steps": ["provider connector choose karna", "draft/send scopes configure karna", "har send se pehle exact message review karna"]}
+        return {"key": "email", "title": "direct email integration", "access": "mail provider/API credentials और send permission", "steps": ["provider connector चुनें", "draft/send scopes configure करें", "हर send से पहले पूरा message review करें"]}
     if re.search(r"google|outlook|calendar sync|sync.*calendar", text):
-        return {"key": "external_calendar_sync", "title": "Google/Outlook calendar sync", "access": "Google ya Microsoft account ka OAuth approval", "steps": ["provider OAuth settings add karna", "tokens ko local encrypted store mein rakhna", "read/write sync ko confirmation ke saath test karna"]}
+        return {"key": "external_calendar_sync", "title": "Google/Outlook calendar sync", "access": "Google या Microsoft account का OAuth approval", "steps": ["provider की OAuth settings जोड़ें", "tokens को local encrypted store में रखें", "read/write sync को confirmation के साथ जाँचें"]}
     if re.search(r"notification|notify|server band|background|startup|reminder", text):
-        return {"key": "persistent_reminders", "title": "SARA band hone par reminders check karna", "access": "SARA project folder aur current-user Windows Scheduled Task permission", "steps": ["project folder mein install_sara_reminders.ps1 chalakar optional task enable karna", "worker har minute due reminders check karega jab aap Windows mein signed in hon", "uninstall_sara_reminders.ps1 se task hataya ja sakta hai; saved reminders rahenge"]}
+        return {"key": "persistent_reminders", "title": "SARA बंद होने पर reminders जाँचना", "access": "SARA project folder और current-user Windows Scheduled Task permission", "steps": ["project folder में install_sara_reminders.ps1 चलाकर optional task enable करें", "Windows में sign in रहने पर worker हर minute due reminders जाँचेगा", "uninstall_sara_reminders.ps1 से task हटाएँ; saved reminders सुरक्षित रहेंगे"]}
     if re.search(r"app|software|computer|system|desktop|jarvis|anything|kuch bhi", text):
-        return {"key": "system_control", "title": "broader Windows app/system control", "access": "explicit per-app allowlist aur action confirmation", "steps": ["safe allowlist define karna", "dry-run preview aur stop control jodna", "one action at a time real-result logging test karna"]}
-    return {"key": "chat", "title": "SARA ka next intelligence module", "access": "aapka exact use-case aur required local access", "steps": ["use-case ko chhote deterministic workflow mein todna", "capability registry aur confirmation policy update karna", "offline/local regression tests add karna"]}
+        return {"key": "system_control", "title": "broader Windows app/system control", "access": "हर app के लिए explicit allowlist और action confirmation", "steps": ["safe allowlist तय करें", "dry-run preview और stop control जोड़ें", "एक बार में एक action का result log करें"]}
+    return {"key": "chat", "title": "SARA का अगला intelligence module", "access": "आपका exact use-case और ज़रूरी local access", "steps": ["use-case को छोटे deterministic workflow में बाँटें", "capability registry और confirmation policy update करें", "offline/local regression tests जोड़ें"]}
 
 
 def action_payload(action):
@@ -196,6 +215,8 @@ def action_payload(action):
         "create_task": ("text",), "write_file": ("path", "content"), "delete_file": ("path",),
         "save_pronunciation": ("word", "say_as"),
         "add_custom_app": ("name", "executable"),
-        "save_capability_request": ("title", "description"),
+        "save_capability_request": ("title", "description", "capability_key", "current_status", "required_access", "implementation_plan"),
+        "approve_memory": ("id", "text"), "update_memory": ("id", "old_text", "text"),
+        "delete_memory": ("id", "text"),
     }.get(kind, ())
     return {key: action[key] for key in fields if key in action}
