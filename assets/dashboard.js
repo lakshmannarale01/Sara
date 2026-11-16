@@ -875,7 +875,7 @@ window.addEventListener('online',()=>{state.recognitionRetryAt=0;state.recogniti
 
 function updateClock() {
   const now=new Date(),hour=now.getHours();
-  $('#greeting').textContent=(hour<12?'Good morning.':hour<17?'Good afternoon.':'Good evening.')+' Your command center.';
+  $('#greeting').textContent=(hour<12?'Good morning.':hour<17?'Good afternoon.':'Good evening.')+' Your SARA is Here.';
   $('#today-date').textContent=now.toLocaleDateString(undefined,{weekday:'short',month:'short',day:'numeric'});
   $('#today-short').textContent=now.toLocaleDateString(undefined,{month:'short',day:'numeric'});
 }
