@@ -11,6 +11,7 @@ export function actionRequest(action) {
     case 'open_app': path='/api/actions/open-app'; body={app:a.app,...(a.executable?{executable:a.executable}:{})}; break;
     case 'notepad_write': path='/api/actions/notepad-write'; body={text:a.text}; break;
     case 'browser_open': path='/api/actions/browser-open'; body={url:a.url}; break;
+    case 'youtube_play': path='/api/actions/youtube-play'; body={query:a.query}; break;
     case 'browser_click_text': path='/api/actions/browser-click-text'; body={url:a.url,text:a.text}; break;
     case 'browser_fill': path='/api/actions/browser-fill'; body={url:a.url,label:a.label,value:a.value}; break;
     case 'whatsapp_send': path='/api/actions/whatsapp-send'; body={phone:a.phone,text:a.text}; break;
@@ -46,7 +47,7 @@ export function actionRequest(action) {
 export function actionDetails(action) {
   const {body} = actionRequest(action);
   const names = {text:'Text',old_text:'Current memory',word:'Word or phrase',say_as:'Speak it as',phone:'Recipient phone',to:'Recipient',subject:'Subject',body:'Message',
-    url:'Website',path:'File path',content:'Full file content',app:'Application',name:'Shortcut name',executable:'Executable path',title:'Request',description:'What SARA should learn to do',label:'Field',
+    url:'Website',query:'YouTube search / first video',path:'File path',content:'Full file content',app:'Application',name:'Shortcut name',executable:'Executable path',title:'Request',description:'What SARA should learn to do',label:'Field',
     value:'Value to enter',keys:'Keyboard shortcut',x:'Screen X',y:'Screen Y',title:'Event',
     capability_key:'Capability',current_status:'Current status',required_access:'Required access',implementation_plan:'Implementation plan',
     start_at:'Starts at',due_at:'Reminder time'};

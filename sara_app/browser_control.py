@@ -1,7 +1,7 @@
 """Confirmation-gated browser actions owned by one Playwright worker thread."""
 from concurrent.futures import ThreadPoolExecutor
 import threading
-from urllib.parse import urlparse
+from urllib.parse import urlparse, urljoin, parse_qs
 from urllib.parse import quote_plus
 
 from .config import ROOT
@@ -187,6 +187,57 @@ def fill_text(url, label, value, confirmed=False):
     _run_browser(_fill_text, target, field, content)
     log("browser_action", {"action": "fill_text", "url": target, "label": field, "confirmed": True})
     return {"ok": True, "result": f"Filled the '{field}' field."}
+
+
+def _play_youtube(query):
+    """Choose the first normal video result; report player evidence honestly."""
+    search_url = "https://www.youtube.com/results?search_query=" + quote_plus(query)
+    page = _page_for_browser(search_url)
+    _navigate(page, search_url, force=True, timeout=20000)
+    # No cookie/login/subscribe button is clicked, and Shorts/ads are excluded.
+    link = page.locator("ytd-video-renderer a#video-title").first
+    try:
+        href = link.get_attribute("href", timeout=8000)
+        title = (link.get_attribute("title", timeout=2000) or query)[:200]
+    except Exception:
+        return {"ok": True, "playback_verified": False, "search_opened": True,
+                "url": search_url, "result": "YouTube search is open. A normal video result was not available; a consent, login or network screen may need your attention. Nothing is confirmed playing."}
+    target = urljoin("https://www.youtube.com", str(href or ""))
+    parsed = urlparse(target)
+    video_id = parse_qs(parsed.query).get("v", [""])[0]
+    if parsed.scheme != "https" or parsed.hostname not in {"www.youtube.com", "youtube.com"} or parsed.path != "/watch" or not video_id:
+        return {"ok": True, "playback_verified": False, "search_opened": True, "url": search_url,
+                "result": "YouTube search is open, but no valid video was selected. Nothing is confirmed playing."}
+    # Rebuild from only the video ID; never follow an arbitrary result href.
+    target = "https://www.youtube.com/watch?v=" + quote_plus(video_id)
+    _navigate(page, target, force=True, timeout=20000)
+    player = {}
+    try:
+        player = page.locator("video").first.evaluate("""async video => {
+          try { await Promise.race([video.play(), new Promise((_,reject)=>setTimeout(()=>reject(new Error('play timeout')),1500))]); } catch {}
+          const ad=document.querySelector('.html5-video-player.ad-showing');
+          return {playing:!video.paused && !video.ended && video.readyState>=2,
+                  audible:!video.muted && video.volume>0, ad:Boolean(ad)};
+        }""", timeout=8000)
+    except Exception:
+        pass
+    verified = isinstance(player, dict) and player.get("playing") is True and player.get("audible") is True and player.get("ad") is False
+    return {"ok": True, "playback_verified": verified, "video_opened": True,
+            "title": title, "url": target,
+            "result": (f"YouTube player reports '{title}' playing with audio enabled. Physical speaker output has not been checked."
+                       if verified else f"Opened '{title}' on YouTube. Playback could not be verified; an ad, buffering or browser autoplay permission may require pressing Play.")}
+
+
+def play_youtube(query, confirmed=False):
+    text = str(query or "").strip()
+    if not text or len(text) > 200 or any(ord(char) < 32 for char in text):
+        raise ValueError("YouTube search must be 1–200 characters without control characters.")
+    if not confirmed:
+        return {"requires_confirmation": True, "risk": "This searches YouTube and requests playback of its first normal video result.", "query": text}
+    result = _run_browser(_play_youtube, text)
+    log("browser_action", {"action": "youtube_play", "query": text,
+                           "playback_verified": result.get("playback_verified") is True, "confirmed": True})
+    return result
 
 
 def whatsapp_send(phone, text, confirmed=False):

@@ -1,7 +1,10 @@
 import {actionRequest, actionDetails} from './action-router.js';
+import {createHudCore} from './hud-core.js';
+import {initializeVisionControls} from './vision-client.js';
 
 const $ = selector => document.querySelector(selector);
 const $$ = selector => [...document.querySelectorAll(selector)];
+const hudCore=createHudCore($('#hud-canvas'),$('#character-stage'));
 const SESSION_ID=(()=>{try {let id=sessionStorage.getItem('sara-session-id');if(!/^[A-Za-z0-9_-]{8,80}$/.test(id || '')){id=crypto.randomUUID();sessionStorage.setItem('sara-session-id',id);}return id;}catch{return 'session-'+Date.now().toString(36)+'-'+Math.random().toString(36).slice(2);}})();
 const prefs = {
   get(key, fallback='') { try { return localStorage.getItem(key) ?? fallback; } catch { return fallback; } },
@@ -9,7 +12,7 @@ const prefs = {
 };
 const state = {view:'home',busy:false,stopped:false,memories:[],pronunciations:[],apps:{built_in:[],custom:[]},capabilityRequests:[],agenda:{tasks:[],events:[],reminders:[]},
   speak:prefs.get('sara-auto-speak','true')==='true',proactive:prefs.get('sara-proactive','false')==='true',
-  voiceMode:prefs.get('sara-voice-mode','system'),naturalVoiceAvailable:false,audio:null,audioUrl:null,audioController:null,
+  voiceMode:prefs.get('sara-voice-mode','system'),naturalVoiceAvailable:false,windowsVoices:[],audio:null,audioUrl:null,audioController:null,
   healthChecked:0,capabilitiesChecked:0,ready:false,historyLoaded:false,utterances:[],speechStarted:false,
   wake:prefs.get('sara-wake','true')==='true',wakeGestureReady:false,
   recognizing:false,recognitionStarting:false,recognitionBlocked:'',recognitionFailures:0,recognitionRetryAt:0,
@@ -20,7 +23,6 @@ const FOLLOW_UP_MS=60000;
 const speechCache=new Map();
 let voiceListWaitCompleted=false;
 const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
 const wakeHelp=[...document.querySelectorAll('.settings-card .card-note')].find(node=>node.textContent.startsWith('Microphone starts'));
 if(wakeHelp) wakeHelp.textContent="Hands-free listening resumes after each reply. Click the microphone once to start a conversation; direct follow-ups stay open for 60 seconds after Sara finishes. After that, say Sara again. Click the active microphone to stop. Browser microphone permission is required; recognition may use an online speech service.";
 
@@ -54,11 +56,11 @@ async function api(path, body, timeout=12000) {
     throw error;
   } finally {clearTimeout(timer);}
 }
-async function chatApi(message,onDelta) {
-  const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),75000);
+async function chatApi(message,onDelta,attachments=[]) {
+  const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),attachments.length?120000:75000);
   let reader;
   try {
-    const response=await fetch('/api/chat',{method:'POST',headers:{'Content-Type':'application/json',Accept:'application/x-ndjson'},body:JSON.stringify({message,session_id:SESSION_ID}),signal:controller.signal});
+    const response=await fetch('/api/chat',{method:'POST',headers:{'Content-Type':'application/json',Accept:'application/x-ndjson'},body:JSON.stringify({message,session_id:SESSION_ID,...(attachments.length?{attachments}:{})}),signal:controller.signal});
     if(!response.ok){const data=await response.json();throw new Error(data.error || 'Chat request failed.');}
     if(!response.headers.get('Content-Type')?.includes('application/x-ndjson'))return await response.json();
     reader=response.body.getReader();const decoder=new TextDecoder();let buffer='',result=null;
@@ -72,6 +74,9 @@ async function chatApi(message,onDelta) {
     throw error;
   } finally {clearTimeout(timer);reader?.releaseLock();}
 }
+const visualInputs=initializeVisionControls({request:api,onError:toast});
+state.lastInteraction=Date.now();
+
 function dateText(value, empty='Time not set') {
   const date=new Date(value);
   return value && !Number.isNaN(date.getTime()) ? date.toLocaleString(undefined,{month:'short',day:'numeric',hour:'numeric',minute:'2-digit'}) : empty;
@@ -90,16 +95,15 @@ function setView(view, updateHash=true) {
   $('#dashboard-grid').classList.toggle('chat-only',view==='chat');
   $$('.detail-view').forEach(node=>{node.hidden=node.id!=='view-'+view;});
   $$('.nav-item').forEach(node=>{const active=node.dataset.view===view;node.classList.toggle('active',active);if(active)node.setAttribute('aria-current','page');else node.removeAttribute('aria-current');});
-  $('#view-name').textContent={home:'Overview',chat:'Talk to SARA',day:'My day',memories:'Memories',activity:'Activity',settings:'Settings & controls'}[view];
+  $('#view-name').textContent={home:'Command center',chat:'Talk to SARA',day:'My day',memories:'Memories',activity:'Activity',settings:'Settings & controls'}[view];
   if(updateHash) history.replaceState(null,'','#'+view);
   if(state.ready && ['day','memories','activity','settings'].includes(view))void refreshData();
 }
 function setCharacter(status) {
   const stage=$('#character-stage');stage.dataset.state=status;
-  $('#character-status').textContent={ready:'Ready when you are',thinking:'Thinking it through',listening:'Listening to you',speaking:'Speaking',review:'Your approval matters'}[status] || 'Ready when you are';
-  const video=$('#character-video');
-  if(status==='speaking' && !reducedMotion.matches){stage.classList.remove('video-failed');video.play().catch(()=>stage.classList.add('video-failed'));}
-  else {video.pause();stage.classList.remove('video-failed');}
+  const label={ready:'Ready for your command',thinking:'Thinking it through',listening:'Listening to you',speaking:'Speaking',review:'Waiting for your approval'}[status] || 'Ready for your command';
+  $('#character-status').textContent=label;stage.setAttribute('aria-label','SARA: '+label);
+  hudCore.setState(status);
 }
 function addMessage(text,who='sara',provider='',savedTime) {
   $('#chat-welcome')?.remove();
@@ -120,8 +124,22 @@ function setBusy(busy) {
 async function submitMessage(message) {
   message=String(message || '').trim();
   if(!state.historyLoaded){toast('Loading your saved conversation…');return;}
-  if(!message || state.busy) return;
-  setView('chat');$('#message').value='';resizeComposer();addMessage(message,'you');setBusy(true);
+  if(state.busy || state.preparingMessage) return;
+  let attachments;
+  state.preparingMessage=true;
+  try {attachments=await visualInputs.attachmentsForMessage();}
+  catch(error){toast(error.message);return;}
+  finally {state.preparingMessage=false;}
+  if(!message && !attachments.length) return;
+  state.lastInteraction=Date.now();
+  setView('chat');$('#message').value='';resizeComposer();
+  const userContent=addMessage(message || 'Please explain this image.','you');
+  if(attachments.length){
+    const previews=el('div','sent-image-previews');
+    for(const item of attachments){const img=el('img');img.src=item.data_url;img.alt=item.source+' image shared with this message';img.style.cssText='max-width:120px;max-height:80px;object-fit:contain;margin:6px 6px 0 0';previews.append(img);}
+    userContent.append(previews);
+  }
+  setBusy(true);
   let liveContent=null,streamed='';
   try {
     const data=await chatApi(message,chunk=>{
@@ -129,7 +147,8 @@ async function submitMessage(message) {
       if(!liveContent)liveContent=addMessage('','sara');
       liveContent.querySelector('.message-text').textContent=streamed;
       $('#thinking').hidden=true;$('#messages').scrollTop=$('#messages').scrollHeight;
-    });
+    },attachments);
+    if(data.provider!=='vision-unavailable')visualInputs.clearSentAttachments(attachments);
     const text=data.reply || 'No reply was returned. Please try again.';
     const content=liveContent || addMessage(text,'sara',data.provider);
     if(liveContent){content.querySelector('.message-text').textContent=text;content.querySelector('.message-author').append(el('small','',humanize(data.provider || 'AI')));}
@@ -143,7 +162,7 @@ async function submitMessage(message) {
     setBusy(false);
     if(data.review_pending && data.action)void reviewAction(data.action);
     else if(state.speak) void speak(text);
-  } catch(error) {addMessage(error.message,'sara','connection');}
+  } catch(error) {addMessage(error.message,'sara','connection');if(!$('#message').value)$('#message').value=message;}
   finally {setBusy(false);void refreshData();}
 }
 function resizeComposer() {const node=$('#message');node.style.height='auto';node.style.height=Math.min(node.scrollHeight,144)+'px';}
@@ -253,7 +272,8 @@ function actionButton(symbol,label,action,extra='') {
 }
 function renderMemories() {
   const preview=$('#memory-preview');preview.replaceChildren();
-  const approved=state.memories.filter(item=>item?.approved===true);
+  const approved=state.memories.filter(item=>item?.approved===true && typeof item.text==='string' && item.text.trim());
+  $('#hud-memory-count').textContent=approved.length+' approved '+(approved.length===1?'memory':'memories');
   if(!approved.length) empty(preview,'Getting to know your preferences.','Tell SARA what helps you. Only the memories you approve are used in replies.');
   approved.slice(-2).forEach(item=>preview.append(el('p','memory-preview-row',item.text)));
   const query=$('#memory-search').value.toLowerCase(),list=$('#memory-list');list.replaceChildren();
@@ -415,6 +435,7 @@ async function refreshData(initial=false) {
       state.naturalVoiceAvailable=Boolean(data.natural_voice);updateVoiceModeAvailability();
       const node=$('#connection'),modelReady=Boolean(data.model_available);
       const label=data.ollama?(modelReady?'Local AI connected':'Ollama model missing'):'Local tools ready';
+      $('#hud-model').textContent=data.ollama?(modelReady?data.model+' · local':'Model not installed'):'Local tools · AI offline';
       node.replaceChildren(el('i'),document.createTextNode(label));
       node.classList.toggle('offline',!data.ollama || !modelReady);
       node.title=data.ollama?(modelReady?'Ollama and model are ready: '+data.model:'Ollama is running, but '+data.model+' is not installed. Run `ollama run '+data.model+'` once.'):'Ollama is not reachable. Chat may use configured cloud AI or the local fallback.';
@@ -424,7 +445,7 @@ async function refreshData(initial=false) {
   $('#error-banner').hidden=!failures.length;
   if(failures.length) {
     $('#error-banner span').textContent='Some workspace data could not load. '+failures[0].reason.message;
-    if(failures.length===requests.length) {$('#connection').replaceChildren(el('i'),document.createTextNode('Server unavailable'));$('#connection').classList.add('offline');}
+    if(failures.length===requests.length) {$('#connection').replaceChildren(el('i'),document.createTextNode('Server unavailable'));$('#connection').classList.add('offline');$('#hud-model').textContent='Server unavailable';}
   }
   state.refreshing=false;
   await refreshSuggestions();
@@ -453,6 +474,7 @@ function finishSpeech(sequence, failed=false) {
   openFollowUpWindow();
   $('#voice-status').textContent=failed?'Voice failed · try another voice':listeningStatus();
   setCharacter(state.busy?'thinking':'ready');scheduleWake();
+  if(failed)showVoiceRetry(state.lastVoicePlayback || 'Voice did not start. Click Retry voice; check your speaker output if it stays silent.');
 }
 function watchSystemSpeech(sequence) {
   clearInterval(speechWatchdog);const started=Date.now();let idleSince=0;
@@ -490,6 +512,10 @@ function preferredVoice(voices,hindi=false) {
   if(chosen && chosen.lang.toLowerCase().startsWith(hindi?'hi':'en'))return chosen;
   const candidates=hindi?voices.filter(voice=>voice.lang.toLowerCase().startsWith('hi')):voices.filter(voice=>voice.lang.toLowerCase().startsWith('en'));
   return [...candidates].sort((a,b)=>voiceScore(b,hindi)-voiceScore(a,hindi))[0] || null;
+}
+function systemVoices() {
+  const browser=window.speechSynthesis?.getVoices() || [];
+  return [...browser,...state.windowsVoices.map(voice=>({...voice,voiceURI:'windows:'+voice.id,localWindows:true}))];
 }
 function reportSystemPlayback(utterances,rate,label='system reply') {
   const routes=[...new Set(utterances.map(item=>`${item.lang || 'default'}: ${item.voice?.name || 'browser default'}`))];
@@ -546,10 +572,40 @@ async function speakNatural(text,sequence) {
     if(state.audioController===controller)state.audioController=null;
   }
 }
+async function speakWindows(text,sequence) {
+  const hindi=/[\u0900-\u097f]/.test(text), selected=preferredVoice(systemVoices(),hindi);
+  const local=state.windowsVoices.find(voice=>selected?.name?.startsWith(voice.name));
+  if(!local)return false;
+  const controller=new AbortController();state.audioController=controller;
+  const timer=setTimeout(()=>controller.abort(),40000);
+  try {
+    const response=await fetch('/api/tts/windows',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({text,voice:local.id,lang:hindi?'hi-IN':local.lang,speed:Number($('#voice-rate').value)}),signal:controller.signal});
+    if(!response.ok){const error=await response.json().catch(()=>({}));throw new Error(error.error || 'Windows voice could not generate audio.');}
+    const blob=await response.blob();if(sequence!==state.speechSequence)return true;
+    state.audioUrl=URL.createObjectURL(blob);const audio=new Audio(state.audioUrl);state.audio=audio;
+    audio.onplaying=()=>{if(sequence!==state.speechSequence)return;state.speechStarted=true;state.lastVoicePlayback='Windows local · '+local.name+' · '+Number($('#voice-rate').value).toFixed(2)+'×';$('#voice-diagnostics').textContent=state.lastVoicePlayback;$('#voice-status').textContent='Speaking · '+local.name;setCharacter('speaking');};
+    audio.onended=()=>finishSpeech(sequence);
+    audio.onerror=()=>{if(sequence===state.speechSequence){showVoiceRetry('Windows audio playback failed. Check speaker output, then retry.');finishSpeech(sequence,true);}};
+    await audio.play();return true;
+  } catch(error) {
+    if(sequence!==state.speechSequence)return true;
+    if(state.audio){state.audio.onended=null;state.audio.onerror=null;state.audio.onplaying=null;state.audio.pause();state.audio.removeAttribute('src');state.audio=null;}
+    if(state.audioUrl){URL.revokeObjectURL(state.audioUrl);state.audioUrl=null;}
+    state.lastVoicePlayback=error.name==='NotAllowedError'?'Voice playback needs a click. Use Enable voice / Retry.':error.message;
+    $('#voice-diagnostics').textContent=state.lastVoicePlayback;
+    return false;
+  } finally {clearTimeout(timer);if(state.audioController===controller)state.audioController=null;}
+}
+function showVoiceRetry(reason) {
+  $('#voice-diagnostics').textContent=reason;$('#voice-status').textContent='Voice failed · '+reason;
+  $('#retry-voice').hidden=false;toast(reason);
+}
 async function speak(text, force=false, systemOnly=false) {
   if(!state.speak && !force) return;
   stopSpeech();const sequence=state.speechSequence;
   const short=String(text).slice(0,1200);
+  state.lastSpeechText=short;$('#retry-voice').hidden=true;
   state.speaking=true;pauseRecognition();
   $('#stop-speech').hidden=false;
   let prepared=speechCache.get(short);
@@ -561,8 +617,10 @@ async function speak(text, force=false, systemOnly=false) {
   if(!prepared.text?.trim()){finishSpeech(sequence);return;}
   if(!systemOnly && state.voiceMode==='natural' && state.naturalVoiceAvailable && await speakNatural(prepared.text,sequence))return;
   if(sequence!==state.speechSequence)return;
+  if(await speakWindows(prepared.text,sequence))return;
+  if(sequence!==state.speechSequence)return;
   if(!('speechSynthesis' in window)) {toast('Speech output is not supported in this browser.');finishSpeech(sequence,true);return;}
-  const voices=await waitForSystemVoices();
+  const voices=(await waitForSystemVoices()).filter(voice=>!voice.localWindows);
   if(sequence!==state.speechSequence)return;
   populateVoices();
   const segments=(prepared.playback || [{text:prepared.text,lang:/[\u0900-\u097f]/.test(prepared.text)?'hi-IN':'en-IN'}]).filter(item=>item.text.trim());
@@ -572,17 +630,17 @@ async function speak(text, force=false, systemOnly=false) {
     utterance.rate=Number($('#voice-rate').value);utterance.pitch=1.04;
     utterance.onstart=()=>{if(sequence===state.speechSequence){state.speechStarted=true;$('#voice-status').textContent='Speaking'+(utterance.voice?.name?' · '+utterance.voice.name:'');setCharacter('speaking');}};
     utterance.onend=()=>{if(index===segments.length-1)finishSpeech(sequence);};
-    utterance.onerror=()=>{if(sequence===state.speechSequence){state.lastVoicePlayback=`System voice error · ${utterance.voice?.name || utterance.lang}`;$('#voice-diagnostics').textContent=state.lastVoicePlayback;toast('Browser voice failed. Open Settings → Test system voice and select an installed system voice.');stopSpeech();finishSpeech(state.speechSequence,true);}};
+    utterance.onerror=event=>{if(sequence===state.speechSequence){state.lastVoicePlayback=`System voice error (${event.error || 'unknown'}) · ${utterance.voice?.name || utterance.lang}`;stopSpeech();finishSpeech(state.speechSequence,true);showVoiceRetry(state.lastVoicePlayback+' · click Retry voice or select another installed voice.');}};
     return utterance;
   });
   reportSystemPlayback(state.utterances,$('#voice-rate').value,systemOnly?'system voice test':'system reply');
   try {window.speechSynthesis.resume();for(const utterance of state.utterances)window.speechSynthesis.speak(utterance);watchSystemSpeech(sequence);} catch {state.lastVoicePlayback='System speech failed to start.';$('#voice-diagnostics').textContent=state.lastVoicePlayback;toast('Could not start browser voice output.');stopSpeech();finishSpeech(state.speechSequence,true);}
 }
 function populateVoices() {
-  const voices=window.speechSynthesis?.getVoices() || [],select=$('#voice-select');
+  const voices=systemVoices(),select=$('#voice-select');
   const savedUri=select.value || prefs.get('sara-voice-uri'),savedName=prefs.get('sara-voice-name'),savedLang=prefs.get('sara-voice-lang');
   select.replaceChildren(new Option('SARA picks the best available voice',''));
-  [...voices].sort((a,b)=>voiceScore(b)-voiceScore(a)).forEach(voice=>select.add(new Option(voice.name+' ('+voice.lang+')',voice.voiceURI)));
+  [...voices].sort((a,b)=>voiceScore(b)-voiceScore(a)).forEach(voice=>select.add(new Option(voice.name+' ('+voice.lang+')'+(voice.localWindows?' · Windows local':''),voice.voiceURI)));
   const savedVoice=voices.find(voice=>voice.voiceURI===savedUri)
     || (savedName?voices.find(voice=>voice.name.toLowerCase()===savedName.toLowerCase() && (!savedLang || voice.lang.toLowerCase()===savedLang.toLowerCase())):null)
     || (savedName?voices.find(voice=>voice.name.toLowerCase()===savedName.toLowerCase()):null)
@@ -733,7 +791,11 @@ document.addEventListener('click',event=>{
   const compose=event.target.closest('[data-compose]');if(compose){setView('chat');$('#message').value=compose.dataset.compose;resizeComposer();$('#message').focus();}
 });
 window.addEventListener('hashchange',()=>setView(location.hash.slice(1),false));
-$('#start-conversation').addEventListener('click',()=>{setView('chat');$('#message').focus();});
+$('#start-conversation').addEventListener('click',()=>{
+  setView('chat');$('#message').focus();setSpeakPreference(true);
+  state.lastInteraction=Date.now();state.voiceConversation=true;setWakePreference(true);openFollowUpWindow();
+  void conversationCheckIn(true);
+});
 $('#chat-form').addEventListener('submit',event=>{event.preventDefault();submitMessage($('#message').value);});
 $('#message').addEventListener('input',resizeComposer);
 $('#message').addEventListener('keydown',event=>{if(event.key==='Enter' && !event.shiftKey && !event.isComposing){event.preventDefault();$('#chat-form').requestSubmit();}});
@@ -748,7 +810,7 @@ $('#stop-speech').addEventListener('click',()=>{stopSpeech();openFollowUpWindow(
 const testVoiceButton=$('#test-voice');
 testVoiceButton.textContent='Test system voice';
 testVoiceButton.addEventListener('click',()=>speak('नमस्ते, मैं सारा हूँ। आपकी आवाज़ और बोलने की गति कैसी लग रही है? This is a short English voice check.',true,true));
-$('#voice-select').addEventListener('change',event=>{const voice=window.speechSynthesis?.getVoices().find(item=>item.voiceURI===event.target.value);saveVoiceSelection(voice||null);});
+$('#voice-select').addEventListener('change',event=>{const voice=systemVoices().find(item=>item.voiceURI===event.target.value);saveVoiceSelection(voice||null);});
 $('#voice-rate').addEventListener('input',event=>{$('#rate-value').textContent=Number(event.target.value).toFixed(2)+'×';prefs.set('sara-voice-rate',event.target.value);});
 $('#recognition-language').addEventListener('change',event=>{prefs.set('sara-recognition-language',event.target.value);pauseRecognition();if(state.recognitionBlocked==='language-not-supported')state.recognitionBlocked='';state.recognitionRetryAt=0;scheduleWake();});
 $('#mic-button').addEventListener('click',()=>{
@@ -764,11 +826,34 @@ window.addEventListener('online',()=>{state.recognitionRetryAt=0;state.recogniti
 
 function updateClock() {
   const now=new Date(),hour=now.getHours();
-  $('#greeting').textContent=(hour<12?'Good morning.':hour<17?'Good afternoon.':'Good evening.')+' Make a little room for you.';
+  $('#greeting').textContent=(hour<12?'Good morning.':hour<17?'Good afternoon.':'Good evening.')+' Your command center.';
   $('#today-date').textContent=now.toLocaleDateString(undefined,{weekday:'short',month:'short',day:'numeric'});
   $('#today-short').textContent=now.toLocaleDateString(undefined,{month:'short',day:'numeric'});
 }
+async function conversationCheckIn(greeting=false) {
+  if(!state.historyLoaded || state.busy || state.speaking || state.dialog || document.hidden || state.checkingIn)return;
+  const activity=state.lastInteraction;state.checkingIn=true;
+  try {
+    const data=await api('/api/check-in',{kind:greeting?'greeting':'suggestion'});
+    if(state.busy || state.speaking || state.dialog || state.lastInteraction!==activity)return;
+    addMessage(data.reply,'sara','local-check-in');
+    state.lastCheckIn=Date.now();
+    if(state.speak)void speak(data.reply);
+  } catch(error){if(greeting)toast(error.message);}
+  finally {state.checkingIn=false;}
+}
 updateClock();setInterval(updateClock,60000);
+const retryVoice=el('button','text-button','Retry voice');retryVoice.id='retry-voice';retryVoice.type='button';retryVoice.hidden=true;
+$('#stop-speech').after(retryVoice);
+retryVoice.addEventListener('click',()=>{setSpeakPreference(true);void speak(state.lastSpeechText || 'नमस्ते, मैं सारा हूँ। अब मेरी आवाज़ सुनाई दे रही है?',true);});
+void api('/api/voices/windows',undefined,12000).then(data=>{state.windowsVoices=data.available&&Array.isArray(data.voices)?data.voices:[];populateVoices();}).catch(()=>{});
+const proactiveMinutes=$('#proactive-minutes');
+proactiveMinutes.value=['5','15','30','60'].includes(prefs.get('sara-proactive-minutes'))?prefs.get('sara-proactive-minutes'):'15';
+proactiveMinutes.addEventListener('change',()=>prefs.set('sara-proactive-minutes',proactiveMinutes.value));
+setInterval(()=>{
+  const interval=Number(proactiveMinutes.value || 15)*60000;
+  if(state.proactive && Date.now()-Math.max(state.lastInteraction,state.lastCheckIn || 0)>=interval)void conversationCheckIn();
+},60000);
 $('#voice-rate').min='0.85';$('#voice-rate').max='1.4';
 $('#voice-rate').value=String(Math.min(1.4,Math.max(.85,Number(prefs.get('sara-voice-rate','1.15'))||1.15)));
 $('#rate-value').textContent=Number($('#voice-rate').value).toFixed(2)+'×';
@@ -783,7 +868,7 @@ ensureCapabilityRequestSettings();
 setView(location.hash.slice(1)||'home',false);
 // Speech recognition requires a browser permission and, on some browsers, one user gesture.
 // Keep wake mode armed across reloads and start it as soon as that permission is available.
-const wakeGesture=()=>{if(state.wake&&!state.recognizing&&!state.busy&&!state.speaking){state.wakeGestureReady=true;scheduleWake();}};
+const wakeGesture=()=>{state.lastInteraction=Date.now();if(state.wake&&!state.recognizing&&!state.busy&&!state.speaking){state.wakeGestureReady=true;scheduleWake();}};
 document.addEventListener('pointerdown',wakeGesture,{passive:true});
 document.addEventListener('keydown',wakeGesture,{passive:true});
 // Permission may already be granted on a later visit. Reading its state does
@@ -800,7 +885,7 @@ navigator.permissions?.query({name:'microphone'}).then(permission=>{
 $('#send-button').disabled=true;
 state.ready=true;
 void refreshData(true);
-try {for(const item of await api('/api/conversations',undefined,2500)){addMessage(item.question||'','you','',item.time);addMessage(item.answer||'','sara',item.provider,item.time);}}
+try {for(const item of await api('/api/conversations',undefined,2500)){if(item.initiated_by!=='sara')addMessage(item.question||'','you','',item.time);addMessage(item.answer||'','sara',item.provider,item.time);}}
 catch {toast('Saved conversation could not load; new messages are still available.');}
 state.historyLoaded=true;scheduleWake();
 $('#send-button').disabled=false;

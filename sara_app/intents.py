@@ -107,6 +107,26 @@ def profile_note(memories):
     return "ABOUT YOU — APPROVED SARA NOTES\n\n" + "\n".join("- " + fact for fact in facts) + "\n\nSource: details you explicitly approved for SARA memory.\n"
 
 
+def plan_youtube(message):
+    """Recognize explicit music/video playback, including common Hinglish forms."""
+    text = re.sub(r"\byou\s+tube\b|यूट्यूब", "youtube", str(message or "").strip(), flags=re.I)
+    if not text or re.search(r"^(?:how|why|what|explain|kaise)\b|\b(?:don't|do not|mat|stop|band)\b", text, re.I):
+        return None
+    playing = re.search(r"\b(?:play|chalao|chala|bajao|sunao)\b|चलाओ|बजाओ|सुनाओ", text, re.I)
+    target = re.search(r"youtube|\b(?:song|songs|music|gaana|gana|gaane|video)\b|गाना|गाने|संगीत", text, re.I)
+    if not (playing and target):
+        return None
+    query = re.sub(r"(?:\bon\s+youtube\b|\byoutube\s+(?:par|pe)\b|\byoutube\b)", " ", text, flags=re.I)
+    query = re.sub(r"\b(?:sara|please|can you|could you|for me|mere liye|play|chalao|chala|bajao|sunao|karo|kar do|ek|koi|achha|accha|song|songs|gaana|gana|gaane|ka|ki|ke)\b|चलाओ|बजाओ|सुनाओ|गाना|गाने|(?:^|\s)(?:सारा|एक|कोई|अच्छा|पर|पे)(?=\s|$)", " ", query, flags=re.I)
+    query = re.sub(r"\s+", " ", query).strip(" ,.!?।\"'")
+    if not query or query.casefold() in {"best", "music", "best music", "a", "some", "a good", "good"}:
+        query = "best Hindi songs"
+    query = query[:200]
+    return {"reply": f"YouTube पर '{query}' search करके पहला सामान्य video चलाने की request तैयार है। Playback का असली result बताऊँगी।",
+            "provider": "youtube-planner", "requires_confirmation": True,
+            "action": {"type": "youtube_play", "query": query, "label": "Play a YouTube video: " + query}}
+
+
 def _literal_content(message):
     quoted = re.search(r'["“](.+?)["”]|\x27(.+?)\x27', message, re.S)
     if quoted:
@@ -208,7 +228,7 @@ def action_payload(action):
     if kind == "create_event":
         return dict(action.get("event") or {})
     fields = {
-        "open_app": ("app", "executable"), "notepad_write": ("text",), "open_browser_url": ("url",), "browser_open": ("url",),
+        "open_app": ("app", "executable"), "notepad_write": ("text",), "open_browser_url": ("url",), "browser_open": ("url",), "youtube_play": ("query",),
         "browser_click_text": ("url", "text"), "browser_fill": ("url", "label", "value"),
         "whatsapp_send": ("phone", "text"), "whatsapp_draft": ("phone", "text"), "email_draft": ("to", "subject", "body"),
         "type_text": ("text",), "hotkey": ("keys",), "click_point": ("x", "y"), "save_memory": ("text",),

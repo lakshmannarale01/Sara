@@ -2,9 +2,11 @@
 
 This file preserves the decisions and implementation context for SARA across Codex tasks.
 
+Start with [SARA_PROJECT_STATUS.md](SARA_PROJECT_STATUS.md) for the current specification, implementation evidence and remaining work. [AGENTS.md](AGENTS.md) tells future project chats to read that ledger first.
+
 ## Vision
 
-SARA is a personal AI companion for Windows: a warm, honest, emotionally expressive AI character that can chat, remember approved information, learn preferences with consent, and eventually operate the computer through permissioned tools.
+SARA is a personalized, local-first Windows assistant with natural Hindi/Hinglish conversation, approved memory and a live procedural Jarvis-style HUD. It should learn preferences with consent, explain its actual capabilities honestly, and operate the computer through scoped, reviewable tools.
 
 SARA is an AI, not a human or conscious being. It must not pretend to have real feelings or encourage unhealthy dependence.
 
@@ -23,9 +25,9 @@ SARA is an AI, not a human or conscious being. It must not pretend to have real 
   - `action_state.py` — session-scoped proposal lifecycle, expiry and actual outcomes.
   - `notes.py` — unique UTF-8 notes, readback verification and exact-path Notepad launch.
   - `reminder_delivery.py` — cross-process reminder claims, per-user Windows notification delivery, retry tracking and file locking shared by the server and optional scheduled worker.
-- Frontend: `index.html`, `assets/dashboard.css`, `assets/dashboard.js`, `assets/action-router.js`.
-- Character asset: `assets/sara-character.png`, supplied by the user.
-- Design includes character states: calm, happy, thinking, listening, and concerned.
+- Frontend: `index.html`, `assets/dashboard.css`, `assets/hud-theme.css`, `assets/dashboard.js`, `assets/hud-core.js`, `assets/action-router.js`.
+- The current interface is a procedural cyan/orange Jarvis HUD inspired by the user's video reference. Canvas draws moving rings, ticks and sweeps; the rendered UI does not load portrait images or video. Older art files remain unused.
+- HUD states are ready, thinking, listening, speaking and review. Speaking starts on actual playback events; decorative idle rotation does not mean SARA is speaking.
 - Memory data and activity logs are intentionally local in `sara_data/`.
 - JSON-backed local lists validate UTF-8, list shape, and object records. Reads skip malformed data with filename-only warnings. Before any replacement of a malformed source, its complete original bytes are preserved in a unique sibling `.recovery-<id>.bak`; backup failure aborts the write.
 - Chat instructions include the live capability status, actual scope, and approval requirement. Memory-list replies and the system-status memory count use only records explicitly marked approved. Memory numbering for `forget memory N` uses that same approved-only list; among AI-context memories, direct word overlap ranks first and recent saved facts break ties. Ordinary chat history is never promoted to long-term memory.
@@ -43,7 +45,7 @@ SARA is an AI, not a human or conscious being. It must not pretend to have real 
 - Reminders can also be checked when the dashboard is closed by enabling the per-user Windows Scheduled Task with `install_sara_reminders.ps1`; it runs the one-shot `sara_reminder_worker.py` once a minute while the user is signed in. Remove it with `uninstall_sara_reminders.ps1`. The server watcher and scheduled worker share a lock so only one process claims each notification at a time.
 - Local planned events are available through confirmation-gated chat workflows and persist in `sara_data/events.json`; email drafts open the default mail app only after confirmation.
 - Dashboard POST requests carry a sessionStorage-backed session ID. Pending proposals expire after five minutes, are bound to exact reviewed action content, and begin atomically once. Short confirmations reopen the same review instead of reaching the model. Actual tool results are persisted/rendered separately and authoritative session evidence enters AI instructions; old assistant prose is not proof of execution.
-- Settings has a bilingual system-voice test that uses the selected installed voice and current speed even when normal playback uses Natural AI voice. Saved system voices restore by URI, then voice name/language if the browser changes its URI; a missing voice stays saved and diagnostics explain the fallback. Playback waits briefly for the browser's installed voice list before choosing an utterance voice. Speaking visuals stay active with a static portrait if avatar video playback fails; speech end events control the return to ready state.
+- Settings has a bilingual system-voice test using the selected installed voice and current speed even when normal playback uses Natural AI voice. Saved voices restore by URI, then name/language; missing choices stay saved with fallback diagnostics. Playback waits briefly for the browser voice list. Canvas respects reduced motion and pauses when hidden; speech end events restore its ready state.
 - The AI prompt asks Hindi/Hinglish replies to use Devanagari for Hindi words and Latin script for English technical terms and names. Common deterministic action, memory, calendar, reminder, task and capability replies use the same script convention, helping Windows Hindi voices pronounce them naturally. Capability gaps include a required-access/build outline and a tracked request flow; SARA must distinguish that from actually editing its own code.
 - Combined Notepad writing saves a new verified note under `sara_data/notes` and launches Notepad with that path, avoiding generic focused-window typing. Personal profile notes use only full explicitly approved memory facts. Launch requests and verified window visibility remain distinct.
 
@@ -98,8 +100,8 @@ __pycache__/
 
 ## Roadmap requested by the user
 
-1. Improve character visual using the supplied illustration.
-2. Add expressive body language and visible emotional states.
+1. Maintain the live animated Jarvis HUD; the latest video-based direction supersedes the earlier portrait illustration.
+2. Connect visual states to actual assistant events and keep the conversation readable.
 3. Keep system voice selection and Hindi/Hinglish speech natural across browser restarts.
 4. Add long-term approved memory and learning.
 5. Add safe computer/app/file control with confirmations.

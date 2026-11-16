@@ -11,11 +11,16 @@ FILES = {
     "/": ("index.html", "text/html; charset=utf-8"),
     "/assets/dashboard.js": ("assets/dashboard.js", "text/javascript; charset=utf-8"),
     "/assets/action-router.js": ("assets/action-router.js", "text/javascript; charset=utf-8"),
+    "/assets/hud-core.js": ("assets/hud-core.js", "text/javascript; charset=utf-8"),
+    "/assets/hud-theme.css": ("assets/hud-theme.css", "text/css; charset=utf-8"),
+    "/assets/vision-client.js": ("assets/vision-client.js", "text/javascript; charset=utf-8"),
+    "/assets/vision-controls.css": ("assets/vision-controls.css", "text/css; charset=utf-8"),
     "/assets/dashboard.css": ("assets/dashboard.css", "text/css; charset=utf-8"),
-    "/assets/sara-character.png": ("assets/sara-character.png", "image/png"),
-    "/assets/sara-avatar-speaking.mp4": ("assets/sara-avatar-speaking.mp4", "video/mp4"),
 }
 DEFAULTS = {
+    "voices/windows": {"available": False, "voices": []},
+    "vision/status": {"available": False, "reason": "No local vision model in this isolated fixture."},
+    "access-mode": {"mode": "review", "stopped": False},
     "agenda": {"tasks": [], "reminders": [], "events": []},
     "memories": [], "conversations": [], "activity": [], "pronunciations": [],
     "apps": {"built_in": [], "custom": []}, "capability-requests": [],

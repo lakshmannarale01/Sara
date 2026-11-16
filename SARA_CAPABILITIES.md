@@ -5,6 +5,7 @@
 ### Conversation
 
 - Ask questions by text or voice.
+- The interface uses a live canvas HUD with cyan/orange rotating rings and distinct listening, thinking, speaking and approval states. It uses no portrait picture or embedded video; reduced-motion preferences are respected.
 - SARA aims to reply in the user's language and style, including Hindi/Hinglish.
 - Spoken replies are enabled by default, with automatic female system voice selection when available and a 1.15× default speed. Hindi/Hinglish AI replies and common action, memory, calendar, task and capability responses use Devanagari Hindi while preserving English product and technical terms; the local speech lexicon also converts common Roman-Hindi tokens without another model call. Settings diagnostics show the voice, language, and speed queued for the latest system reply, and warn if no Hindi voice was available. Settings also offers optional natural AI voice through the OpenAI API when configured; it uses API credits and is disclosed as AI-generated.
 - SARA receives the live capability registry and should explain a missing feature, identify needed access where known, and offer to plan/implement it.

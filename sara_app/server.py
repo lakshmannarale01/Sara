@@ -13,13 +13,18 @@ from .tools import open_url, open_browser_url, open_whatsapp_draft, open_app, op
 from .desktop import type_text, press_hotkey, click_point
 from .browser_control import open_page as semantic_open_page, click_text as semantic_click_text, fill_text as semantic_fill_text, whatsapp_send, shutdown_browser
 from .capabilities import capability_snapshot
-from .policy import inspect_action, is_stopped, set_stopped
+from .policy import inspect_action, is_stopped, set_stopped, access_mode, set_access_mode
+from .vision import validate_attachments, attachment_summary, vision_status
+from .windows_speech import voice_status as windows_voice_status, synthesize as windows_synthesize
 from .console import trace as console_trace
 from .planner_validation import normalize_planner_time, planner_item_id
 from . import action_state
 from .intents import short_confirmation, is_action_status_question, is_capability_overview_question, memory_request_text, plan_notepad, unhandled_operation, capability_request, action_payload, approved_salutation
 from .notes import create_notepad_note, read_note
 from .reminder_delivery import deliver_due_reminders, reminder_file_lock
+from .intents import plan_youtube
+from .browser_control import play_youtube
+from .tools import execute_routine_action
 
 _health_cache = {"checked_at": 0.0, "ollama": False, "model_available": False}
 _health_lock = threading.Lock()
@@ -401,11 +406,26 @@ class Handler(BaseHTTPRequestHandler):
                 data["action"] = {**proposal["action"], "proposal_id": proposal["id"]}
                 data["proposal_id"] = proposal["id"]
                 data["action_status"] = proposal["status"]
+                verdict = inspect_action(proposal["action"]["type"], payload=action_payload(proposal["action"]))
+                if verdict.get("automatic"):
+                    action_state.begin(session, proposal["id"])
+                    try:
+                        result = execute_routine_action(proposal["action"])
+                    except Exception:
+                        result = {"ok": False, "result": "Routine action failed; no successful result was verified."}
+                    succeeded = result.get("ok") is True and not result.get("requires_confirmation")
+                    outcome = action_state.finish(session, proposal["id"], "completed" if succeeded else "failed", result)
+                    data.update(reply=result.get("result") or result.get("error") or "Action did not complete.", provider="trusted-tool", requires_confirmation=False,
+                                action_status=outcome["status"], action_result={"proposal_id": proposal["id"], "type": proposal["action"]["type"], "status": outcome["status"]}, tool_result=result)
+                    log("action_result", {**data["action_result"], "automatic": True, "result": data["reply"]})
             data["timing"] = {**getattr(self, "ai_timing", {}), "total_ms": round((time.perf_counter() - getattr(self, "chat_started", time.perf_counter())) * 1000)}
             question = getattr(self, "chat_message", "")
             answer = str(data["reply"])[:4000]
             provider = data.get("provider", "unknown")
-            append_conversation({"time": now(), "question": question, "answer": answer, "provider": provider})
+            turn = {"time": now(), "question": question, "answer": answer, "provider": provider}
+            if getattr(self, "chat_attachments", None): turn["attachments"] = attachment_summary(self.chat_attachments)
+            if data.get("action_result"): turn["action_result"] = data["action_result"]
+            append_conversation(turn)
             log("conversation", {"question": question, "answer": answer, "provider": provider})
             self.trace(f"Boss: {question}")
             self.trace(f"SARA ({provider}): {answer.replace(chr(10), ' ')}")
@@ -418,9 +438,16 @@ class Handler(BaseHTTPRequestHandler):
         except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
             self.trace("Client disconnected before SARA could deliver the response")
     def body(self):
-        size = int(self.headers.get("Content-Length", "0")); return json.loads(self.rfile.read(size) or b"{}")
+        size = int(self.headers.get("Content-Length", "0"))
+        if size < 0 or size > 16 * 1024 * 1024: raise ValueError("Request is too large (maximum 16 MB).")
+        payload = json.loads(self.rfile.read(size) or b"{}")
+        if not isinstance(payload, dict): raise ValueError("A JSON object is required.")
+        return payload
     def do_GET(self):
         path = urlparse(self.path).path
+        if path == "/api/vision/status": return self.send_json(200, vision_status(force=parse_qs(urlparse(self.path).query).get("refresh") == ["1"]))
+        if path == "/api/voices/windows": return self.send_json(200, windows_voice_status())
+        if path == "/api/access-mode": return self.send_json(200, {"mode": access_mode(), "stopped": is_stopped()})
         if path == "/api/action-state":
             session = parse_qs(urlparse(self.path).query).get("session_id", [""])[0]
             if not re.fullmatch(r"[A-Za-z0-9_-]{8,80}", session): return self.send_json(400, {"error": "A dashboard session is required."})
@@ -509,11 +536,30 @@ class Handler(BaseHTTPRequestHandler):
         path = unquote(urlparse(self.path).path)
         self.chat_started = time.perf_counter()
         try:
+            origin = self.headers.get("Origin")
+            if origin:
+                parsed_origin = urlparse(origin)
+                if parsed_origin.scheme != "http" or parsed_origin.hostname not in {"127.0.0.1", "localhost", "::1"} or parsed_origin.port != PORT:
+                    return self.send_json(403, {"error": "SARA accepts actions only from its local dashboard."})
             data = self.body()
             session = data.get("session_id")
             if session is not None and not (isinstance(session, str) and re.fullmatch(r"[A-Za-z0-9_-]{8,80}", session)):
                 return self.send_json(400, {"error": "Invalid dashboard session."})
             self.session_id = session
+            if path == "/api/access-mode":
+                if not session: return self.send_json(400, {"error": "A dashboard session is required."})
+                mode = set_access_mode(data.get("mode"))
+                log("access_mode_changed", {"mode": mode})
+                return self.send_json(200, {"mode": mode, "stopped": is_stopped()})
+            if path == "/api/check-in":
+                if not session: return self.send_json(400, {"error": "A dashboard session is required."})
+                if data.get("kind") == "greeting":
+                    reply = "नमस्ते, मैं सारा हूँ। बताइए, क्या करना है? मैं आपकी बात सुनने के लिए तैयार हूँ।"
+                else:
+                    reply, _ = agenda_reply("एक छोटा check-in")
+                append_conversation({"time": now(), "question": "[SARA check-in]", "answer": reply, "provider": "local-check-in", "initiated_by": "sara"})
+                log("conversation", {"question": "[SARA check-in]", "answer": reply, "provider": "local-check-in", "initiated_by": "sara"})
+                return self.send_json(200, {"reply": reply, "provider": "local-check-in"})
             if path == "/api/actions/cancel":
                 if not session: return self.send_json(400, {"error": "A dashboard session is required."})
                 cancelled = action_state.cancel(session, data.get("proposal_id"))
@@ -531,6 +577,7 @@ class Handler(BaseHTTPRequestHandler):
                 "/api/actions/open-app": "open_app", "/api/actions/email-draft": "email_draft",
                 "/api/actions/type-text": "type_text", "/api/actions/hotkey": "hotkey", "/api/actions/click-point": "click_point",
                 "/api/actions/notepad-write": "notepad_write",
+                "/api/actions/youtube-play": "youtube_play",
                 "/api/actions/browser-open": "browser_open", "/api/actions/browser-click-text": "browser_click_text",
                 "/api/actions/browser-fill": "browser_fill", "/api/actions/whatsapp-send": "whatsapp_send",
                 "/api/tools/open-url": "open_browser_url",
@@ -547,7 +594,7 @@ class Handler(BaseHTTPRequestHandler):
             if not route_action and path.startswith("/api/tasks/") and path.endswith("/delete"): route_action = "delete_task"
             if not route_action and path.startswith("/api/events/") and path.endswith("/delete"): route_action = "delete_event"
             if route_action:
-                verdict = inspect_action(route_action, data.get("confirmed") is True)
+                verdict = inspect_action(route_action, data.get("confirmed") is True, payload=data)
                 if not verdict["allowed"]: return self.send_json(409, {**verdict, "request": data})
                 if session:
                     proposal_id = data.get("proposal_id")
@@ -569,6 +616,18 @@ class Handler(BaseHTTPRequestHandler):
                     try: action_state.begin(session, proposal_id)
                     except ValueError as exc: return self.send_json(409, {"error": str(exc)})
                     self.executing_proposal = proposal_id
+            if path == "/api/tts/windows":
+                raw_text = data.get("text", "")
+                if not isinstance(raw_text, str) or not raw_text.strip() or len(raw_text) > 1200:
+                    return self.send_json(400, {"error": "Speech text must contain 1–1200 characters."})
+                text = prepare_speech(raw_text.strip())["text"][:1200]
+                try:
+                    audio, voice, lang = windows_synthesize(text, voice=data.get("voice", ""), lang=data.get("lang", ""), rate=data.get("speed", 1.0))
+                except (RuntimeError, OSError, subprocess.TimeoutExpired) as exc:
+                    return self.send_json(503, {"error": str(exc) if isinstance(exc, RuntimeError) else "Windows speech is temporarily unavailable."})
+                self.send_response(200); self.send_header("Content-Type", "audio/wav"); self.send_header("Content-Length", str(len(audio)))
+                self.send_header("Cache-Control", "no-store"); self.send_header("X-SARA-Voice", quote_plus(voice)); self.send_header("X-SARA-Language", lang)
+                self.end_headers(); self.wfile.write(audio); return
             if path == "/api/speech-text":
                 text = str(data.get("text", "")).strip()
                 if not text: return self.send_json(400, {"error": "Text is required"})
@@ -595,9 +654,23 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_response(200); self.send_header("Content-Type", "audio/mpeg"); self.send_header("Content-Length", str(len(body))); self.end_headers(); self.wfile.write(body); return
             if path == "/api/chat":
                 message = str(data.get("message", "")).strip()
-                if not message: return self.send_json(400, {"error": "Message is required"})
+                attachments = validate_attachments(data.get("attachments", []))
+                if not message and not attachments: return self.send_json(400, {"error": "Message or image is required"})
+                if len(message) > 8000: return self.send_json(400, {"error": "Message must be at most 8000 characters."})
+                if attachments and not message: message = "इस image में क्या दिख रहा है? समझाइए।"
                 self.chat_message = message
+                self.chat_attachments = attachments
+                if attachments:
+                    on_token = None
+                    if "application/x-ndjson" in self.headers.get("Accept", ""):
+                        self.stream_event({"type": "start"})
+                        on_token = lambda token: self.stream_event({"type": "delta", "text": token})
+                    reply, provider = ask(message, on_token, tool_context=action_state.context(session) if session else None, attachments=attachments)
+                    self.ai_timing = request_performance()
+                    return self.send_json(200, {"reply": reply, "provider": provider, "attachments": attachment_summary(attachments)})
                 lower = message.lower()
+                youtube = plan_youtube(message)
+                if youtube: return self.send_json(200, youtube)
                 confirmation = short_confirmation(message)
                 if confirmation:
                     pending = action_state.pending(session) if session else None
@@ -1146,9 +1219,9 @@ class Handler(BaseHTTPRequestHandler):
                 if not data.get("confirmed"): return self.send_json(409, {"requires_confirmation": True, "risk": "This opens a browser window."})
                 return self.send_json(200, {"result": open_url(str(data.get("url", "")))})
             if path == "/api/actions/open-browser-url":
-                verdict = inspect_action("open_browser_url", bool(data.get("confirmed")))
+                verdict = inspect_action("open_browser_url", bool(data.get("confirmed")), payload=data)
                 if not verdict["allowed"]: return self.send_json(409, verdict)
-                result = open_browser_url(str(data.get("url", "")), bool(data.get("confirmed")))
+                result = open_browser_url(str(data.get("url", "")), True)
                 if result.get("requires_confirmation"): return self.send_json(409, result)
                 self.trace(f"Action completed: open_browser_url {data.get('url')}")
                 return self.send_json(200, result)
@@ -1159,13 +1232,18 @@ class Handler(BaseHTTPRequestHandler):
                 if result.get("requires_confirmation"): return self.send_json(409, result)
                 self.trace("Action completed: WhatsApp draft opened"); return self.send_json(200, result)
             if path == "/api/actions/open-app":
-                verdict = inspect_action("open_app", bool(data.get("confirmed")))
+                verdict = inspect_action("open_app", bool(data.get("confirmed")), payload=data)
                 if not verdict["allowed"]: return self.send_json(409, verdict)
-                result = open_app(data.get("app", ""), bool(data.get("confirmed")), data.get("executable"))
+                result = open_app(data.get("app", ""), True, data.get("executable"))
                 if result.get("requires_confirmation"): return self.send_json(409, result)
                 self.trace(f"Action completed: open_app {data.get('app')}"); return self.send_json(200, result)
             if path == "/api/actions/notepad-write":
                 result = create_notepad_note(data.get("text", ""), confirmed=data.get("confirmed") is True)
+                return self.send_json(200 if result.get("ok") else 502, result)
+            if path == "/api/actions/youtube-play":
+                verdict = inspect_action("youtube_play", data.get("confirmed") is True, payload=data)
+                if not verdict["allowed"]: return self.send_json(409, verdict)
+                result = play_youtube(data.get("query", ""), confirmed=True)
                 return self.send_json(200 if result.get("ok") else 502, result)
             if path == "/api/actions/email-draft":
                 verdict = inspect_action("email_draft", bool(data.get("confirmed")))
@@ -1192,9 +1270,9 @@ class Handler(BaseHTTPRequestHandler):
                 if result.get("requires_confirmation"): return self.send_json(409, result)
                 self.trace(f"Action completed: desktop click {data.get('x')},{data.get('y')}"); return self.send_json(200, result)
             if path == "/api/actions/browser-open":
-                verdict = inspect_action("browser_open", bool(data.get("confirmed")))
+                verdict = inspect_action("browser_open", bool(data.get("confirmed")), payload=data)
                 if not verdict["allowed"]: return self.send_json(409, verdict)
-                result = semantic_open_page(data.get("url", ""), bool(data.get("confirmed")))
+                result = semantic_open_page(data.get("url", ""), True)
                 if result.get("requires_confirmation"): return self.send_json(409, result)
                 self.trace(f"Action completed: browser open {data.get('url')}"); return self.send_json(200, result)
             if path == "/api/actions/browser-click-text":

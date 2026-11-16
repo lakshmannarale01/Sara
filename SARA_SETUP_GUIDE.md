@@ -2,6 +2,8 @@
 
 This file is the single setup reference for moving SARA to another Windows laptop.
 
+For the product target, implemented features, verification evidence and remaining work, read [SARA_PROJECT_STATUS.md](SARA_PROJECT_STATUS.md). Agents continuing this project should read [AGENTS.md](AGENTS.md) first. Open the actual repository in a new chat, or attach/provide the status-file path; an unrelated chat will not automatically discover these files.
+
 ## 1. What must be installed
 
 | Requirement | Why it is needed | Required? |
@@ -150,7 +152,7 @@ ollama list
 - Email opens a reviewable draft in the default mail handler. SARA does not send email directly.
 - WhatsApp send uses the separate SARA Chromium profile and always requires an explicit confirmation.
 - Reminder notifications run with SARA or the optional current-user scheduled worker. Enable that worker to check reminders while the server is closed; Windows sign-in is required.
-- Voice input/output and the animated character are browser features; wake mode requires the dashboard to remain open. It automatically re-arms after SARA replies, after short browser recognition timeouts, and when the tab becomes visible again. Browser microphone permission and its first user gesture are still required by browser privacy rules.
+- Voice input/output and the live animated HUD are browser features; wake mode requires the dashboard to remain open. It automatically re-arms after SARA replies, after short browser recognition timeouts, and when the tab becomes visible again. Browser microphone permission and its first user gesture are still required by browser privacy rules.
 - The optional OpenAI speech endpoint currently uses `gpt-4o-mini-tts`. OpenAI's documentation lists it for shutdown on January 6, 2027; move that optional mode to the Realtime API before then.
 - This remains a local web application, not a signed native desktop installer. Screen vision and realtime interruptible voice are future roadmap work.
 
@@ -193,8 +195,11 @@ With the installed Playwright Chromium runtime, browser checks can load only app
 .\.venv\Scripts\python.exe tests\ui_voice_session_smoke.py fixture
 .\.venv\Scripts\python.exe tests\ui_voice_preferences_smoke.py
 .\.venv\Scripts\python.exe tests\ui_smoke.py fixture
+.\.venv\Scripts\python.exe tests\ui_hud_smoke.py
 ```
 
-On November 13, 2026, 135 offline tests and these five browser checks passed. They cover saved history rendering, streamed chat, approval state, malformed-data recovery, approved-memory deletion, Hindi/English preparation, delayed voice restoration, pronunciation updates, avatar event timing and desktop layout. Microsoft Kalpana was present in the machine's Windows voice inventory. Physical pronunciation and speaker latency still require listening to `Test system voice` in the running app.
+On November 13, 2026, **210 offline tests and these six browser checks passed**. They cover saved history rendering, streamed chat, approval state, malformed-data recovery, approved-memory deletion, natural-time planning, Hindi/English preparation, delayed voice restoration, pronunciation updates and the live HUD. The HUD check verifies changing canvas pixels/frames, no portrait/video requests, pixel-density cap, app-state transitions, hidden-view pause/resume and static reduced-motion rendering. Desktop window-fit checks pass at 1366×768, 1024×768, 1092×614 and 1024×600; mocked-data screenshots at 1440×900 and 390×844 were visually inspected. The 800×600 mobile layout intentionally scrolls vertically.
+
+Microsoft Kalpana was present in the machine's Windows voice inventory. Physical pronunciation and speaker latency still require listening to `Test system voice` in the running app. Mock browser results do not establish real Windows app outcomes, notification delivery or external provider quality. The current status and next acceptance checks are tracked in [SARA_PROJECT_STATUS.md](SARA_PROJECT_STATUS.md).
 
 If a damaged local JSON file needs repair, the next successful write preserves its original bytes alongside it as `filename.json.recovery-<id>.bak`. A filename-only console message identifies that backup.

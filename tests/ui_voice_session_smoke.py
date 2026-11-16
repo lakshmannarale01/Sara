@@ -15,6 +15,9 @@ def main():
     with sync_playwright() as playwright:
         browser = playwright.chromium.launch(headless=True)
         page = browser.new_page(viewport={"width": 1366, "height": 768})
+        # This suite advances minutes of virtual time to exercise recognition.
+        # Canvas animation itself is independently verified in ui_hud_smoke.py.
+        page.emulate_media(reduced_motion="reduce")
         errors, pending_chats, submitted = [], [], []
         page.on("pageerror", lambda error: errors.append(str(error)))
         page.clock.install(time="2026-11-04T06:00:00Z")

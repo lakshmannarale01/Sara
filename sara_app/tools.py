@@ -51,3 +51,26 @@ def open_email_draft(to, subject, body, confirmed=False):
     if not confirmed: return {"requires_confirmation": True, "risk": "This opens an email draft.", "to": recipient, "subject": subject}
     url = f"mailto:{recipient}?subject={quote_plus(str(subject))}&body={quote_plus(str(body))}"
     webbrowser.open(url); log("tool", {"tool": "open_email_draft", "to": recipient, "confirmed": True}); return {"ok": True, "result": "Email draft opened. Review it and press Send to send it."}
+
+
+def execute_routine_action(action):
+    """Execute a named routine action only under a fresh persisted trust grant."""
+    from .intents import action_payload
+    from .policy import inspect_action
+    if not isinstance(action, dict):
+        raise ValueError("A routine action object is required.")
+    kind = action.get("type")
+    payload = action_payload(action)
+    verdict = inspect_action(kind, payload=payload)
+    if not verdict.get("allowed") or not verdict.get("automatic"):
+        raise ValueError(verdict.get("error") or "This action requires review; trusted routine permission is unavailable.")
+    if kind == "open_app":
+        return open_app(payload["app"], confirmed=True, executable=payload.get("executable"))
+    if kind == "open_browser_url":
+        return open_browser_url(payload["url"], confirmed=True)
+    from . import browser_control
+    if kind == "browser_open":
+        return browser_control.open_page(payload["url"], confirmed=True)
+    if kind == "youtube_play":
+        return browser_control.play_youtube(payload["query"], confirmed=True)
+    raise ValueError("This routine action has no connected executor.")
