@@ -61,6 +61,37 @@ class ActionWorkflowTests(unittest.TestCase):
         self.assertEqual(status, 200, data)
         return data
 
+    def test_search_followup_keeps_original_message_and_session(self):
+        self.enter_patch(server, 'read_conversations', return_value=[
+            {'session_id': self.SESSION, 'question': 'open chrome', 'answer': 'Chrome launch requested'}])
+        data = self.chat('ab search python')
+        self.assertEqual(data['action']['type'], 'open_browser_url')
+        self.assertTrue(data['action']['url'].endswith('q=python'))
+        saved = self.append.call_args.args[0]
+        self.assertEqual(saved['question'], 'ab search python')
+        self.assertEqual(saved['search_query'], 'python')
+        self.assertEqual(saved['session_id'], self.SESSION)
+
+    def test_search_reference_does_not_cross_dashboard_sessions(self):
+        self.enter_patch(server, 'read_conversations', return_value=[
+            {'session_id': self.OTHER_SESSION, 'search_query': 'private query'}])
+        data = self.chat('search that')
+        self.assertNotIn('action', data)
+
+    def test_named_chat_task_review_binds_priority_and_excludes_chat_metadata(self):
+        chat_id='a'*32
+        self.enter_patch(server.chats,'messages',return_value=[])
+        status,plan=self.post('/api/chat',{'chat_id':chat_id,'message':'high priority task study physics'})
+        self.assertEqual(status,200)
+        self.assertEqual(plan['action']['priority'],'high')
+        other_status,_=self.post('/api/tasks',{'chat_id':'b'*32,'text':'study physics','priority':'high','category':'general','confirmed':True,'proposal_id':plan['proposal_id']})
+        self.assertEqual(other_status,409)
+        self.enter_patch(server,'write_tasks')
+        status,result=self.post('/api/tasks',{'chat_id':chat_id,'text':'study physics','priority':'high','category':'general','confirmed':True,'proposal_id':plan['proposal_id']})
+        self.assertEqual(status,201,result)
+        self.assertEqual(result['priority'],'high')
+        self.assertEqual(self.append.call_args.args[0]['chat_id'],chat_id)
+
     def propose_note(self, message='Notepad mein "Hello from Sara" likho.'):
         data = self.chat(message)
         self.assertTrue(data["requires_confirmation"])

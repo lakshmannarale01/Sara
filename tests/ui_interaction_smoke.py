@@ -30,8 +30,9 @@ def main():
         """)
 
         def api(route):
-            path = route.request.url.split("/api/")[-1]
+            path = route.request.url.split("/api/")[-1].split('?')[0]
             payload = {"agenda": {"tasks": [], "events": [], "reminders": []}, "memories": [],
+                       'chats':[{'id':'a'*32,'title':'Fixture chat'}],
                        "conversations": [{"question": "Saved question from before restart", "answer": "Saved SARA answer", "provider": "ollama"}],
                        "activity": [], "policy": {"stopped": False, "actions": {}},
                        "capabilities": {}, "health": {"ollama": True, "model": "test", "natural_voice": False}}

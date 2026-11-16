@@ -5,11 +5,34 @@
 - Last updated: **16 November 2026**.
 - Actual checkout observed: **`D:\SARA`**. The configured `D:\sara ai` path was absent during this session.
 - Overall state: **working local assistant with ongoing development**. The complete Jarvis-style vision is not yet finished or fully verified.
-- Latest implemented milestone: **Windows media controls and named saved routines**, building on trusted access, visual chat, native speech and the live HUD. New abilities use named tools and exact reviewed plans; the complete Jarvis vision remains in development.
-- Current verification: **343 offline tests and all twelve browser checks passed**. The updated server is running with trusted mode and read-only Windows audio/routine endpoints verified. Physical mutations, real player responses and broader workflow limits remain separate.
+- Latest implemented milestone: **Named chats, local focus/study tools and task metadata**, building on dynamic appearance, media controls, saved routines, visual chat and native speech. The complete Jarvis vision remains in development.
+- Current verification: **354 isolated offline tests passed**; this pass also passed named-chat/productivity, action workflow, interaction, voice-session, appearance and viewport browser checks. Other browser results in older sections are historical. Server restarted; empty named and legacy chat stores verified after the user-requested reset.
 - Supporting references: [technical context](SARA_PROJECT_CONTEXT.md), [setup/run guide](SARA_SETUP_GUIDE.md), [command guide](SARA_CAPABILITIES.md), [access rules](SARA_ACCESS_REQUIREMENTS.md), [long-term blueprint](SARA_AI_BLUEPRINT.md).
 
 ## What we are building
+
+### 16 November 2026 — supplied specification, organized chats and free productivity
+
+- User supplied a J.A.R.V.I.S. specification excerpt with category counts totalling 543 features, not a complete itemized implementation specification. See [free feature roadmap](SARA_FREE_FEATURE_ROADMAP.md) for concrete implemented scope and remaining work. No new paid API/provider enabled.
+- Added atomic `sara_data/chats.json` named conversation storage: up to 100 chats, latest 200 turns each. New/resume/rename/export/delete controls sit above chat. Model context, visual question context, action outcomes and proactive replies use the selected chat. Approved memories remain shared intentionally. Session action identity is renewed when switching chats; proposals also bind chat identity. Late generation cannot recreate a deleted chat. Legacy log fallback was removed so empty histories stay empty.
+- Added My day focus/break timer with configurable durations, pause/reset, completion counter and reload-safe deadlines. Timer and flashcard deck are browser-local. Flashcards support save/delete, flip, self-assessed review rounds and a model-assisted quiz shortcut. No background timer notification or automatic app blocking is claimed.
+- Added task priority/category and explicit due-date picker, included in exact action review and persistence. New commands: `high priority task study physics`, `add to shopping list milk bread eggs`. Natural task deadline parsing remains pending; reminder natural-date handling already exists.
+- Explicit user-requested fresh start executed with server stopped: cleared `conversations.json`, `chats.json`, `activity.jsonl`, and removed 10 stdout/stderr transcript logs under `sara_data/runtime`. No backup was made; deletion is permanent through this operation. Memories, notes, tasks and reminders were not reset. After restart, GET checks reported zero saved chats and zero legacy turns. Refresh an existing browser window to discard its old rendered messages and initialize a new chat.
+- Checks: 354 offline tests plus six browser scripts listed at the top passed. Tests cover context isolation, per-chat retention, deletion during generation, cross-chat approval rejection, original task metadata, named-chat navigation/export/delete, deadline restoration, flashcards, speech flow and responsive layout. Native microphone/voice, external websites and physical apps were not exercised by mocks.
+
+### 16 November 2026 — dynamic dashboard appearance
+
+- Added five selectable looks (Jarvis, Warm companion, Playful buddy, Aurora, Focus) using `assets/appearance.js` / `.css`. Topbar Look button cycles looks; Settings → Make SARA yours selects a look or rotation mode. Preferences persist locally. Daily rotation is the default for users without a saved mode; manual selection locks the selected look. Optional rotation runs every 30 minutes, deferred while busy, speaking, recognizing voice, reviewing an action, or holding an unsent draft; hidden pages do not rotate.
+- Live canvas supports rings, orbit designs, a cartoon robot face, and a minimal ring. All use current speaking/listening/thinking/review state; reduced motion is respected. Chat, approval, capture and planner DOM is retained, not rebuilt when appearance changes. Theme choice does not enable new tools.
+- Verified with `ui_appearance_smoke.py`: five looks, draft preservation, saved preferences, working mocked chat, 1024/390 widths, daily preference and clock-simulated idle rotation deferral/resumption. Existing `ui_hud_smoke.py` passed for motion/playback synchronization and accessibility. Inspected the Playful screenshot. Hardware voice/capture and every action were not retested per theme.
+- General adaptive task layouts and broader Windows automation remain pending; appearance is now dynamic, not all planned capabilities are implemented.
+
+### 16 November 2026 — icon and search continuity repair
+
+- Added a geometric cyan S mark as `assets/sara-icon.svg` and multi-size Windows `assets/sara.ico`, linked from the dashboard. Rebuild the ICO with `build_sara_icon.py` (Pillow). Browser app/taskbar icon refresh depends on browser/Windows caching; the actual taskbar appearance has not been visually verified.
+- Removed the previous follow-up implementation that prepended old conversation prose to executable command text and recursively saved it. New search routing reads only recent search metadata from the same dashboard session, keeps original user messages, and handles `ab search python`, `python tutorials search karo`, and `search that`. A missing reference asks for the topic.
+- Search follows existing action review/trusted mode. It opens a search URL; it does not read results or guarantee navigation in a particular existing Chrome tab. General cross-app continuity and page extraction remain pending.
+- Verification: 349 isolated offline tests passed, including new routing, original-message persistence and cross-session isolation checks. `git diff --check` passed. Earlier browser check counts above are historical, not rerun for this pass.
 
 SARA is a personalized, local-first Windows assistant inspired by Jarvis. It should understand natural Hindi, Hinglish and English; hold useful conversations; remember approved preferences; help plan the user's day; and complete clearly scoped computer tasks through real tools. It should explain missing capabilities and help plan improvements honestly.
 

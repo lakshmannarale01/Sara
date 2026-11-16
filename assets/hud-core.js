@@ -11,6 +11,7 @@ export function createHudCore(canvas, stage = canvas?.parentElement) {
   }
 
   const doc = canvas.ownerDocument;
+  let appearance = {style:'rings',accent:'#68eaff',secondary:'#ff984f'};
   const win = doc.defaultView;
   const preference = win.matchMedia?.('(prefers-reduced-motion: reduce)');
   let state = STATES.has(stage.dataset.state) ? stage.dataset.state : 'ready';
@@ -42,14 +43,46 @@ export function createHudCore(canvas, stage = canvas?.parentElement) {
     if (!visible()) return;
     const t = reduced() ? 0 : phase;
     const review = state === 'review';
-    const primary = review ? '#ffb166' : '#68eaff';
-    const accent = '#ff984f';
+    const primary = review ? '#ffb166' : appearance.accent;
+    const accent = appearance.secondary;
     const pulse = state === 'speaking' ? .5 + .5 * Math.sin(t * 6.8)
       : state === 'listening' ? .5 + .5 * Math.sin(t * 2.1) : .5;
     const radius = Math.min(width * .39, height * .405);
     const cx = width / 2, cy = height / 2;
     context.setTransform(density, 0, 0, density, 0, 0);
     context.clearRect(0, 0, width, height);
+    if (appearance.style !== 'rings') {
+      context.save(); context.translate(cx,cy);
+      const breathe = reduced() ? 1 : 1 + Math.sin(t * 1.3) * .025;
+      context.scale(breathe,breathe);
+      if (appearance.style === 'buddy') {
+        // Friendly procedural face: mouth follows playback state, never wall time alone.
+        const r=radius*.70;
+        context.fillStyle=primary+'18';context.strokeStyle=primary;context.lineWidth=3;
+        context.beginPath();context.roundRect(-r,-r*.6,r*2,r*1.3,r*.35);context.fill();context.stroke();
+        const blink=!reduced() && t%5>4.83;
+        for(const side of [-1,1]) {
+          if(blink)line(side*r*.38-r*.13,0,side*r*.38+r*.13,0,primary,4);
+          else {context.beginPath();context.ellipse(side*r*.38,-r*.04,r*.11,r*(state==='listening'?.19:.14),0,0,TAU);context.fillStyle=primary;context.fill();}
+          dot(side*r*.68,r*.23,r*.075,accent+'99');
+        }
+        if(state==='speaking'){context.beginPath();context.ellipse(0,r*.35,r*.19,r*(.06+pulse*.09),0,0,TAU);context.fillStyle=primary;context.fill();}
+        else {context.beginPath();context.arc(0,r*.22,r*.23,.2,Math.PI-.2);context.strokeStyle=primary;context.lineWidth=3;context.stroke();}
+        line(0,-r*.6,0,-r*.9,primary,3);dot(0,-r*.95,r*.09,review?accent:primary,6);
+        if(state==='thinking')for(let i=0;i<3;i++)dot((i-1)*r*.3,r*.95,3+(reduced()?0:Math.sin(t*3+i)*1.5),accent);
+      } else if(appearance.style==='minimal') {
+        arc(radius*.8,0,TAU,primary+'55',1);
+        arc(radius*.8,t*.2,t*.2+(state==='thinking'?1.4:.3),primary,3);
+        if(state==='speaking'||state==='listening')arc(radius*(.88+pulse*.04),0,TAU,primary+'66',1);
+      } else {
+        for(let i=0;i<4;i++){
+          context.save();context.rotate(t*.08+i*Math.PI/4);context.scale(1,.58+i*.07);
+          arc(radius*(.75+i*.08),0,TAU,i%2?accent+'88':primary+'aa',1.7);
+          dot(Math.cos(t*.4+i)*radius*(.75+i*.08),Math.sin(t*.4+i)*radius*(.75+i*.08),state==='speaking'?3+pulse*3:3,primary,8);context.restore();
+        }
+      }
+      context.restore();canvas.dataset.frame=String(++frames);canvas.dataset.state=state;canvas.dataset.motion=reduced()?'reduced':'animated';return;
+    }
 
     // Faint drafting grid and fixed edge brackets anchor the moving geometry.
     const grid = Math.max(22, radius / 5);
@@ -217,6 +250,11 @@ export function createHudCore(canvas, stage = canvas?.parentElement) {
   }) : null;
   mutations?.observe(stage, { attributes: true, attributeFilter: ['data-state', 'hidden'] });
   preference?.addEventListener?.('change', refresh);
+  const onAppearance=event=>{
+    const value=event.detail;
+    if(value && ['rings','buddy','orbit','minimal'].includes(value.style) && /^#[0-9a-f]{6}$/i.test(value.accent) && /^#[0-9a-f]{6}$/i.test(value.secondary)) {appearance=value;refresh();}
+  };
+  doc.addEventListener('sara-appearance',onAppearance);
   doc.addEventListener('visibilitychange', refresh);
   win.addEventListener('resize', resize, { passive: true });
   resize();
@@ -233,6 +271,7 @@ export function createHudCore(canvas, stage = canvas?.parentElement) {
       stop(); destroyed = true;
       resized?.disconnect(); intersection?.disconnect(); mutations?.disconnect();
       preference?.removeEventListener?.('change', refresh);
+      doc.removeEventListener('sara-appearance',onAppearance);
       doc.removeEventListener('visibilitychange', refresh);
       win.removeEventListener('resize', resize);
       canvas.dataset.motion = 'stopped';

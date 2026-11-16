@@ -6,6 +6,12 @@ For the product target, implemented features, verification evidence and remainin
 
 ## 1. What must be installed
 
+Organized chats: use **+ New chat** above the conversation, or select an earlier chat from the dropdown. Rename, export as text, and delete controls are alongside it. Named transcripts are saved in `sara_data/chats.json` (100 chats maximum, 200 retained turns per chat). Deleting a chat does not delete exported copies or historical diagnostic logs. Approved memories apply across chats.
+
+Free productivity: **My day → Focus & study** provides focus/break timing and flashcards. Enter one `question :: answer` per line, save the deck, and flip/review it. Timer/deck data stays in this browser's localStorage; clearing browser data removes it. Tasks have priority, category and an optional explicit due-date picker. For natural language try `high priority task study physics` or `add to shopping list milk bread eggs`.
+
+Dashboard looks: use the topbar **Look** button, or **Settings → Make SARA yours**. Choose Jarvis, Warm companion, Playful buddy, Aurora or Focus. Daily rotation is enabled by default for a new appearance preference; choose **Keep my choice** to lock it or **Every 30 minutes while idle** for more variety. Settings are local to the browser. Refresh the dashboard after an update to load the appearance controls.
+
 | Requirement | Why it is needed | Required? |
 |---|---|---|
 | Windows 10/11 | SARA currently uses Windows voice, `msg.exe`, and desktop actions | Yes |

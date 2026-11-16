@@ -58,7 +58,7 @@ def main():
         def api(route):
             path = route.request.url.split("/api/")[-1].split("?")[0]
             defaults = {"agenda": {"tasks": [], "events": [], "reminders": []}, "memories": [],
-                        "conversations": [], "activity": [], "policy": {"stopped": False, "actions": {}},
+                        "conversations": [], "chats":[{'id':'a'*32,'title':'Fixture chat'}], "activity": [], "policy": {"stopped": False, "actions": {}},
                         "capabilities": {}, "health": {"ollama": True, "model": "mock", "natural_voice": False}}
             if path == "chat":
                 submitted.append(route.request.post_data_json["message"])

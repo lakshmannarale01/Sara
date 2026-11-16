@@ -8,6 +8,13 @@ from urllib.parse import urlsplit
 
 ROOT = Path(__file__).resolve().parent.parent
 FILES = {
+    "/assets/chat-library.js": ("assets/chat-library.js", "text/javascript; charset=utf-8"),
+    "/assets/productivity.js": ("assets/productivity.js", "text/javascript; charset=utf-8"),
+    "/assets/productivity.css": ("assets/productivity.css", "text/css; charset=utf-8"),
+    "/assets/appearance.js": ("assets/appearance.js", "text/javascript; charset=utf-8"),
+    "/assets/appearance.css": ("assets/appearance.css", "text/css; charset=utf-8"),
+    "/assets/sara.ico": ("assets/sara.ico", "image/x-icon"),
+    "/assets/sara-icon.svg": ("assets/sara-icon.svg", "image/svg+xml"),
     "/": ("index.html", "text/html; charset=utf-8"),
     "/assets/dashboard.js": ("assets/dashboard.js", "text/javascript; charset=utf-8"),
     "/assets/action-router.js": ("assets/action-router.js", "text/javascript; charset=utf-8"),
@@ -20,6 +27,7 @@ FILES = {
     "/assets/dashboard.css": ("assets/dashboard.css", "text/css; charset=utf-8"),
 }
 DEFAULTS = {
+    "chats": [{"id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","title":"Fixture chat"}],
     "audio/status": {"available": False, "reason": "No real Windows audio is used in this isolated fixture."},
     "routines": {"routines": []},
     "voices/windows": {"available": False, "voices": []},

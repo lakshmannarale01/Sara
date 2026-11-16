@@ -1,0 +1,8 @@
+.chat-library{display:flex;gap:5px;flex-wrap:wrap;padding:8px 14px;border-bottom:1px solid var(--line);flex:none}
+.chat-library select{flex:1 1 130px;min-width:0;max-width:100%;font-size:11px}
+.chat-library button,.productivity-panel button{border:1px solid var(--line);background:var(--surface);color:var(--text);padding:7px;border-radius:7px;font-size:11px;cursor:pointer}
+.productivity-panel{padding:18px;margin:12px 0}.productivity-panel h2{margin-bottom:12px}
+.focus-clock{font-size:32px;font-variant-numeric:tabular-nums;color:var(--accent);display:block;margin:12px 0}
+.productivity-row{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin:10px 0}.productivity-row input{width:90px}
+.productivity-panel textarea{width:100%;min-height:90px;background:var(--bg);color:var(--text);padding:10px;border:1px solid var(--line)}
+.study-card{white-space:pre-wrap;overflow-wrap:anywhere;padding:16px;border:1px solid var(--line);margin:12px 0}

@@ -215,6 +215,8 @@ def capability_request(message):
         return {"key": "external_calendar_sync", "title": "Google/Outlook calendar sync", "access": "Google या Microsoft account का OAuth approval", "steps": ["provider की OAuth settings जोड़ें", "tokens को local encrypted store में रखें", "read/write sync को confirmation के साथ जाँचें"]}
     if re.search(r"notification|notify|server band|background|startup|reminder", text):
         return {"key": "persistent_reminders", "title": "SARA बंद होने पर reminders जाँचना", "access": "SARA project folder और current-user Windows Scheduled Task permission", "steps": ["project folder में install_sara_reminders.ps1 चलाकर optional task enable करें", "Windows में sign in रहने पर worker हर minute due reminders जाँचेगा", "uninstall_sara_reminders.ps1 से task हटाएँ; saved reminders सुरक्षित रहेंगे"]}
+    if re.search(r"advanced|advance|planner|workflow|multi.?step", text):
+        return {"key": "workflow_planning", "title": "advanced multi-step workflow planning", "access": "आपका goal और प्रत्येक consequential step की review अनुमति", "steps": ["goal को bounded executable steps में विभाजित करें", "हर step की capability और risk जाँचें", "supported steps का result और failed step का कारण दिखाएँ"]}
     if re.search(r"app|software|computer|system|desktop|jarvis|anything|kuch bhi", text):
         return {"key": "system_control", "title": "broader Windows app/system control", "access": "हर app के लिए explicit allowlist और action confirmation", "steps": ["safe allowlist तय करें", "dry-run preview और stop control जोड़ें", "एक बार में एक action का result log करें"]}
     return {"key": "chat", "title": "SARA का अगला intelligence module", "access": "आपका exact use-case और ज़रूरी local access", "steps": ["use-case को छोटे deterministic workflow में बाँटें", "capability registry और confirmation policy update करें", "offline/local regression tests जोड़ें"]}
@@ -236,7 +238,7 @@ def action_payload(action):
         "browser_click_text": ("url", "text"), "browser_fill": ("url", "label", "value"),
         "whatsapp_send": ("phone", "text"), "whatsapp_draft": ("phone", "text"), "email_draft": ("to", "subject", "body"),
         "type_text": ("text",), "hotkey": ("keys",), "click_point": ("x", "y"), "save_memory": ("text",),
-        "create_task": ("text",), "write_file": ("path", "content"), "delete_file": ("path",),
+        "create_task": ("text","priority","category","due_at"), "write_file": ("path", "content"), "delete_file": ("path",),
         "save_pronunciation": ("word", "say_as"),
         "add_custom_app": ("name", "executable"),
         "save_capability_request": ("title", "description", "capability_key", "current_status", "required_access", "implementation_plan"),

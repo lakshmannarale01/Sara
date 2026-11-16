@@ -36,7 +36,7 @@ export function actionRequest(action) {
     case 'delete_capability_request': path='/api/capability-requests/'+id()+'/delete'; body={}; break;
     case 'create_reminder': path='/api/reminders'; body={...a.reminder}; break;
     case 'delete_reminder': path='/api/reminders/'+id()+'/delete'; body={}; break;
-    case 'create_task': path='/api/tasks'; body={text:a.text}; break;
+    case 'create_task': path='/api/tasks'; body={text:a.text,...(a.priority?{priority:a.priority}:{}),...(a.category?{category:a.category}:{}),...(a.due_at?{due_at:a.due_at}:{})}; break;
     case 'complete_task': path='/api/tasks/'+id()+'/complete'; body={}; break;
     case 'delete_task': path='/api/tasks/'+id()+'/delete'; body={}; break;
     case 'create_event': path='/api/events'; body={...a.event}; break;

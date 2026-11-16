@@ -28,6 +28,9 @@ from .tools import execute_routine_action
 from .system_controls import read_audio_status, execute_media_control, normalize_media_payload
 from .routines import list_routines, save_routine, delete_routine, execute_saved_routine, normalize_steps
 from .ability_intents import plan_ability_command, is_audio_status_question
+from .followups import plan_search
+from . import chats
+from .task_intents import plan_task
 
 _health_cache = {"checked_at": 0.0, "ollama": False, "model_available": False}
 _health_lock = threading.Lock()
@@ -399,6 +402,7 @@ class Handler(BaseHTTPRequestHandler):
             data["action_result"] = {"proposal_id": executing, "type": outcome["action"]["type"], "status": outcome["status"]}
             result_text = data.get("result") if isinstance(data.get("result"), str) else data.get("error") or ("Action completed." if succeeded else "Action failed; its result needs review.")
             saved_outcome = {"time": now(), "question": "[Approved action] " + outcome["action"]["type"], "answer": result_text, "provider": "tool-result", "action_result": data["action_result"]}
+            if getattr(self,'chat_id',None): saved_outcome['chat_id']=self.chat_id
             if isinstance(data.get("step_results"), list):
                 saved_outcome["step_results"] = data["step_results"][:8]
                 saved_outcome["total_steps"] = data.get("total_steps", len(saved_outcome["step_results"]))
@@ -409,6 +413,7 @@ class Handler(BaseHTTPRequestHandler):
             reply = str(data["reply"])
             data["reply"] = re.sub(r"^Boss,\s*", salutation + (" " if salutation else ""), reply, count=1, flags=re.I)
             if session and data.get("requires_confirmation") and data.get("action"):
+                if getattr(self,'chat_id',None): data['action']['_chat_id']=self.chat_id
                 proposal = action_state.propose(session, data["action"])
                 data["action"] = {**proposal["action"], "proposal_id": proposal["id"]}
                 data["proposal_id"] = proposal["id"]
@@ -429,7 +434,9 @@ class Handler(BaseHTTPRequestHandler):
             question = getattr(self, "chat_message", "")
             answer = str(data["reply"])[:4000]
             provider = data.get("provider", "unknown")
-            turn = {"time": now(), "question": question, "answer": answer, "provider": provider}
+            turn = {"time": now(), "question": question, "answer": answer, "provider": provider, **({"session_id": session} if session else {})}
+            if getattr(self,'chat_id',None): turn['chat_id']=self.chat_id
+            if data.get("search_query"): turn["search_query"] = data["search_query"]
             if getattr(self, "chat_attachments", None): turn["attachments"] = attachment_summary(self.chat_attachments)
             if data.get("action_result"): turn["action_result"] = data["action_result"]
             if isinstance(data.get("tool_result"), dict) and isinstance(data["tool_result"].get("step_results"), list):
@@ -523,11 +530,14 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send_json(200, {"available": False, "error": "Playwright is not installed"})
         if path == "/api/activity":
             return self.send_json(200, read_recent_activity())
+        if path == '/api/chats': return self.send_json(200, chats.list_chats())
         if path == "/api/conversations":
             try:
+                chat_id = parse_qs(urlparse(self.path).query).get('chat_id',[''])[0]
+                if chat_id:
+                    try: return self.send_json(200, chats.messages(chat_id))
+                    except ValueError as exc: return self.send_json(404, {'error':str(exc)})
                 items = read_conversations()
-                if not items:
-                    items = list(reversed([item for item in read_recent_activity(500) if item.get("event") == "conversation"]))
                 return self.send_json(200, items[-30:])
             except (OSError, json.JSONDecodeError): return self.send_json(200, [])
         if path == "/api/suggestions":
@@ -558,6 +568,17 @@ class Handler(BaseHTTPRequestHandler):
             if session is not None and not (isinstance(session, str) and re.fullmatch(r"[A-Za-z0-9_-]{8,80}", session)):
                 return self.send_json(400, {"error": "Invalid dashboard session."})
             self.session_id = session
+            self.chat_id = data.get('chat_id')
+            if self.chat_id is not None:
+                if not isinstance(self.chat_id,str) or not re.fullmatch(r'[a-f0-9]{32}',self.chat_id): raise ValueError('Invalid chat ID')
+                chats.messages(self.chat_id)
+            data.pop('chat_id',None)  # Conversation metadata is not an approved tool argument.
+            if path == '/api/chats/create': return self.send_json(201,chats.create(data.get('title','New chat')))
+            if path == '/api/chats/rename':
+                chats.rename(self.chat_id,data.get('title'));return self.send_json(200,{'ok':True})
+            if path == '/api/chats/delete':
+                if data.get('confirmed') is not True: raise ValueError('Confirm chat deletion first.')
+                chats.delete(self.chat_id);return self.send_json(200,{'ok':True})
             if path == "/api/access-mode":
                 if not session: return self.send_json(400, {"error": "A dashboard session is required."})
                 mode = set_access_mode(data.get("mode"))
@@ -578,6 +599,7 @@ class Handler(BaseHTTPRequestHandler):
                 else:
                     reply, _ = agenda_reply("एक छोटा check-in")
                 turn = {"time": now(), "question": "[SARA check-in]", "answer": reply, "provider": provider, "initiated_by": "sara"}
+                if self.chat_id: turn['chat_id']=self.chat_id
                 if images: turn["attachments"] = attachment_summary(images)
                 append_conversation(turn)
                 log("conversation", {key: value for key, value in turn.items() if key != "time"})
@@ -636,6 +658,8 @@ class Handler(BaseHTTPRequestHandler):
                         proposal = action_state.get(session, proposal_id)
                         if not proposal or proposal["action"].get("type") != route_action:
                             return self.send_json(409, {"error": "This action does not match the pending proposal in this dashboard."})
+                        if proposal['action'].get('_chat_id') != self.chat_id:
+                            return self.send_json(409, {'error':'This action belongs to another chat. Request it in the current chat.'})
                         expected = action_payload(proposal["action"])
                         actual = {key: value for key, value in data.items() if key not in {"session_id", "proposal_id", "confirmed"}}
                         if expected != actual:
@@ -644,6 +668,7 @@ class Handler(BaseHTTPRequestHandler):
                             return self.send_json(409, {"error": "Selected item changed after review."})
                     else:
                         reviewed = {key: value for key, value in data.items() if key not in {"session_id", "confirmed", "proposal_id", "type"}}
+                        if self.chat_id: reviewed['_chat_id']=self.chat_id
                         if route_action in {"approve_memory", "delete_memory", "update_memory", "delete_pronunciation", "delete_custom_app", "delete_capability_request", "delete_reminder", "delete_task", "complete_task", "delete_event", "run_routine", "delete_routine"}: reviewed["id"] = path.split("/")[-2]
                         proposal = action_state.propose(session, {**reviewed, "type": route_action})
                         proposal_id = proposal["id"]
@@ -699,12 +724,26 @@ class Handler(BaseHTTPRequestHandler):
                     if "application/x-ndjson" in self.headers.get("Accept", ""):
                         self.stream_event({"type": "start"})
                         on_token = lambda token: self.stream_event({"type": "delta", "text": token})
-                    reply, provider = ask(message, on_token, tool_context=action_state.context(session) if session else None, attachments=attachments)
+                    context = action_state.context(session) if session else {}
+                    if self.chat_id: context['chat_id']=self.chat_id
+                    reply, provider = ask(message, on_token, tool_context=context or None, attachments=attachments)
                     self.ai_timing = request_performance()
                     return self.send_json(200, {"reply": reply, "provider": provider, "attachments": attachment_summary(attachments)})
                 lower = message.lower()
+                task_plan = plan_task(message)
+                if task_plan: return self.send_json(200,task_plan)
+                recent = chats.messages(self.chat_id)[-30:] if self.chat_id else [item for item in read_conversations()[-30:] if session and item.get("session_id") == session]
+                search_plan = plan_search(message, recent)
+                if search_plan: return self.send_json(200, search_plan)
                 if re.search(r"(?:camera|कैमरा).*(?:open|start|चालू|खोल)|(?:photo|फोटो|तस्वीर).*(?:capture|ले|खींच)", lower):
                     return self.send_json(200, {"reply": "Camera access ke liye neeche Camera button dabaiye. Browser permission allow karne ke baad Capture frame dabakar photo mujhe bhej sakte hain; main bina aapki permission camera nahi chalaungi.", "provider": "visual-control", "visual_request": "camera"})
+                plan_match = re.match(r"(?:plan|workflow|योजना)\s*[:,-]?\s*(.+)$", message, re.I | re.S)
+                if plan_match and ";" in plan_match.group(1):
+                    steps = [part.strip() for part in plan_match.group(1).split(";") if part.strip()]
+                    if len(steps) > 8:
+                        return self.send_json(400, {"error": "A plan can contain at most 8 steps."})
+                    lines = "\n".join(f"{index}. {step}" for index, step in enumerate(steps, 1))
+                    return self.send_json(200, {"reply": "यह workflow plan तैयार है। अभी कोई step execute नहीं हुआ:\n" + lines + "\n\nहर consequential step को अलग review के बाद चलाया जाएगा।", "provider": "workflow-planner", "workflow": {"steps": steps, "count": len(steps), "status": "preview"}})
                 ability = plan_ability_command(message)
                 if ability: return self.send_json(200, ability)
                 if is_audio_status_question(message):
@@ -1012,7 +1051,9 @@ class Handler(BaseHTTPRequestHandler):
                 if "application/x-ndjson" in self.headers.get("Accept", ""):
                     self.stream_event({"type": "start"})
                     on_token = lambda token: self.stream_event({"type": "delta", "text": token})
-                reply, provider = ask(message, on_token, tool_context=action_state.context(session)) if session else ask(message, on_token)
+                context = action_state.context(session) if session else {}
+                if self.chat_id: context['chat_id']=self.chat_id
+                reply, provider = ask(message, on_token, tool_context=context) if context else ask(message, on_token)
                 self.ai_timing = request_performance()
                 self.trace(f"Chat provider: {provider}")
                 return self.send_json(200, {"reply": reply, "provider": provider})
@@ -1141,7 +1182,12 @@ class Handler(BaseHTTPRequestHandler):
                 if not data.get("confirmed"): return self.send_json(409, {"requires_confirmation": True, "risk": "This adds a local task.", "text": text})
                 try: ident = planner_item_id(data.get("id"), now())
                 except ValueError as exc: return self.send_json(400, {"error": str(exc)})
-                item = {"id": ident, "text": text.strip(), "created": now(), "status": "pending"}
+                if len(text.strip())>500: raise ValueError('Task text must be at most 500 characters.')
+                priority=data.get('priority','medium');category=data.get('category','general')
+                if priority not in ('high','medium','low'): raise ValueError('Invalid task priority')
+                if category not in ('general','work','study','shopping','personal'): raise ValueError('Invalid task category')
+                due_at=normalize_planner_time(data.get('due_at'),optional=True)
+                item = {"id": ident, "text": text.strip(), "created": now(), "status": "pending",'priority':priority,'category':category,'due_at':due_at}
                 with TASK_LOCK:
                     tasks = read_tasks()
                     if any(entry.get("id") == ident for entry in tasks): return self.send_json(409, {"error": "A task with this ID already exists. Request and review a new task."})

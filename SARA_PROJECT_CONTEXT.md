@@ -2,6 +2,10 @@
 
 This file preserves the decisions and implementation context for SARA across Codex tasks.
 
+## Standing implementation direction
+
+The owner wants SARA continuously advanced toward the Jarvis-style product target. Treat new SARA capability requests as implementation backlog items by default: inspect the current code, implement the safest useful modular slice, test it, and update this context/status ledger. Do not wait for the owner to repeat “implement it.” Preserve local-first privacy, explicit capture consent, scoped tools and review gates for consequential actions.
+
 Start with [SARA_PROJECT_STATUS.md](SARA_PROJECT_STATUS.md) for the current specification, implementation evidence and remaining work. [AGENTS.md](AGENTS.md) tells future project chats to read that ledger first.
 
 ## Vision
@@ -39,6 +43,8 @@ SARA is an AI, not a human or conscious being. It must not pretend to have real 
 - Chat replies that begin with the default `Boss,` use the newest applicable approved preferred-name memory; an approved request not to use Boss removes the default greeting. This also applies to deterministic local tool replies before history is persisted.
 - Memory, reminder, task, event and conversation JSON lists use replace-after-write persistence; read-modify-write flows for mutable user lists are serialized so concurrent dashboard requests do not overwrite each other or leave truncated JSON.
 - Conversation turns are persisted locally in `sara_data/conversations.json` so SARA can retain recent context across restarts; approved memory remains separate and requires explicit confirmation.
+- Named dashboard chats now persist in `sara_data/chats.json` with independent model history. `conversations.json` remains a legacy path for older clients. The 16 November reset cleared old transcript stores and logs at the user's request. New chat/resume/rename/export/delete controls and chat-bound action proposals are implemented; see the current status ledger rather than older transcript-retention descriptions below.
+- My day now includes local browser Pomodoro and flashcards; task creation supports priority/category/due-date fields. See `SARA_FREE_FEATURE_ROADMAP.md` for the supplied Jarvis specification mapping and limitations.
 - Dashboard chat and wake listening wait until saved conversation history has loaded, preventing new input from racing against history rendering.
 - Read-only system readiness is available through chat and reports Ollama, desktop control, browser runtime, approved-memory count, and pending reminders.
 - Startup attempts to start a reachable local Ollama service when needed, locating its CLI on PATH or in common Windows install folders. Health status distinguishes a running service from an installed configured model; SARA does not download models automatically.

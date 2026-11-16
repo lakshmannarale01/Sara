@@ -164,6 +164,9 @@ def read_reminders(): return _read_json_list(REMINDER_FILE)
 def write_reminders(items): _write_json_atomic(REMINDER_FILE, items)
 def read_conversations(): return _read_json_list(CONVERSATION_FILE)
 def append_conversation(item):
+    if item.get('chat_id'):
+        from .chats import append
+        return append(item['chat_id'], item)
     with CONVERSATION_LOCK:
         items = read_conversations(); items.append(item)
         _write_json_atomic(CONVERSATION_FILE, items, limit=200)

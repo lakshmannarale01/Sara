@@ -1,6 +1,10 @@
 """Capability registry and confirmation policy for SARA actions."""
 
 CAPABILITIES = {
+    'named_conversations': {'status':'available','risk':'low','scope':'local named chats with create, resume, rename, text export and confirmed deletion; independent recent model context, up to 100 chats and 200 turns per chat'},
+    'focus_timer': {'status':'available','risk':'low','scope':'My day browser focus/break timer with pause, reset, duration controls and deadline restoration; dashboard completion status, no app blocking or background notification'},
+    'study_flashcards': {'status':'available','risk':'low','scope':'My day local browser flashcards entered as question :: answer; flip, self-assessed review round, save/delete; quiz shortcut uses configured chat model'},
+    "workflow_planning": {"status": "partial", "risk": "medium", "confirmation": True, "scope": "turns a natural-language goal into visible bounded steps; only supported steps can execute and consequential steps remain reviewable"},
     "chat": {"status": "available", "risk": "low", "scope": "local-first text chat with Ollama, optional OpenAI, and a safe local fallback"},
     "memory": {"status": "available", "risk": "medium", "confirmation": True, "scope": "only user-approved facts are used; memory stays local and can be reviewed, edited, or removed"},
     "voice": {"status": "available", "risk": "low", "scope": "browser microphone input after permission; spoken output uses installed system voices, with optional OpenAI TTS"},

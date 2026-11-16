@@ -1,0 +1,24 @@
+/* Shared colours and shapes; all functional DOM remains stable between looks. */
+html[data-look] body{background:radial-gradient(ellipse at 45% 0,color-mix(in srgb,var(--accent) 10%,transparent),transparent 65%),var(--bg)}
+html[data-look] .sidebar,html[data-look] .topbar{background:var(--bg)}
+html[data-look] .panel,html[data-look] body[data-view] .hero,html[data-look] dialog{background:var(--surface);border-color:color-mix(in srgb,var(--accent) 24%,transparent)}
+html[data-look] .panel::before,html[data-look] .panel::after{border-color:var(--accent)}
+html[data-look] .nav-item.active,html[data-look] .text-button,html[data-look] .eyebrow,html[data-look] .tiny-star,html[data-look] .sara-monogram{color:var(--accent)}
+html[data-look] .nav-item.active{border-color:var(--accent);background:color-mix(in srgb,var(--accent) 10%,transparent)}
+html[data-look] .primary-button,html[data-look] .send-button{background:var(--accent);border-color:var(--accent);color:#10141b}
+html[data-look] .composer,html[data-look] .visual-input,html[data-look] .message.user .message-text{background:color-mix(in srgb,var(--bg) 85%,var(--accent));border-color:color-mix(in srgb,var(--accent) 30%,transparent)}
+html[data-look] button:focus-visible,html[data-look] select:focus-visible,html[data-look] textarea:focus-visible{outline-color:var(--accent)}
+html[data-look] .character-caption{background:var(--bg)!important;color:var(--accent)!important}
+html[data-look] .hud-core-copy{background:radial-gradient(ellipse,var(--surface) 30%,transparent 73%)}
+html[data-look] .hud-core-copy h2{color:var(--accent)!important;text-shadow:none!important}
+html[data-look='companion'] .panel,html[data-look='companion'] body[data-view] .hero,html[data-look='playful'] .panel,html[data-look='playful'] body[data-view] .hero{border-radius:22px}
+html[data-look='companion'] .panel::before,html[data-look='companion'] .panel::after,html[data-look='playful'] .panel::before,html[data-look='playful'] .panel::after{display:none}
+html[data-look='playful'] button,html[data-look='playful'] .composer,html[data-look='companion'] .composer{border-radius:16px}
+html[data-core-style='buddy'] .hud-core-copy{top:16%;background:none}
+html[data-look='minimal'] .panel,html[data-look='minimal'] body[data-view] .hero{box-shadow:none}
+html[data-look='minimal'] .panel::before,html[data-look='minimal'] .panel::after{display:none}
+.appearance-card>p{color:var(--muted);font-size:12px;margin:12px 0}
+.appearance-card select{width:100%;margin-bottom:18px}
+.appearance-quick{font-size:10px;white-space:nowrap;max-width:160px;overflow:hidden;text-overflow:ellipsis}
+@media(max-width:560px){.appearance-quick{max-width:100px;padding:6px!important;font-size:9px}.topbar-right{gap:5px!important}.date-label{display:none}}
+@media(max-width:560px){html[data-look] .topbar{height:auto;min-height:64px;flex-wrap:wrap;padding:8px 12px;gap:6px}html[data-look] .breadcrumb{flex-basis:100%}html[data-look] .topbar-right{width:100%;justify-content:space-between}}

@@ -1,5 +1,6 @@
 .venv/
 sara_data/
 __pycache__/
+.sara-offline-*/
 *.pyc
 .env

@@ -51,6 +51,7 @@ def main():
             if payload is not None:
                 posts.append((path, payload))
             defaults = {
+                'chats': [{'id':'a'*32,'title':'Fixture chat'}],
                 "agenda": {"tasks": [], "events": [], "reminders": []}, "memories": [],
                 "conversations": [], "activity": [], "policy": {"stopped": False, "actions": {}},
                 "capabilities": {}, "health": {"ollama": True, "model": "mock", "natural_voice": False},

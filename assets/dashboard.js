@@ -2,11 +2,15 @@ import {actionRequest, actionDetails} from './action-router.js';
 import {createHudCore} from './hud-core.js';
 import {initializeVisionControls} from './vision-client.js';
 import {initializeAbilities} from './abilities-client.js';
+import {initializeAppearance} from './appearance.js';
+import {initializeChats} from './chat-library.js';
+import {initializeProductivity} from './productivity.js';
 
 const $ = selector => document.querySelector(selector);
 const $$ = selector => [...document.querySelectorAll(selector)];
 const hudCore=createHudCore($('#hud-canvas'),$('#character-stage'));
-const SESSION_ID=(()=>{try {let id=sessionStorage.getItem('sara-session-id');if(!/^[A-Za-z0-9_-]{8,80}$/.test(id || '')){id=crypto.randomUUID();sessionStorage.setItem('sara-session-id',id);}return id;}catch{return 'session-'+Date.now().toString(36)+'-'+Math.random().toString(36).slice(2);}})();
+let SESSION_ID=(()=>{try {let id=sessionStorage.getItem('sara-session-id');if(!/^[A-Za-z0-9_-]{8,80}$/.test(id || '')){id=crypto.randomUUID();sessionStorage.setItem('sara-session-id',id);}return id;}catch{return 'session-'+Date.now().toString(36)+'-'+Math.random().toString(36).slice(2);}})();
+let ACTIVE_CHAT='';
 const prefs = {
   get(key, fallback='') { try { return localStorage.getItem(key) ?? fallback; } catch { return fallback; } },
   set(key, value) { try { localStorage.setItem(key, String(value)); } catch { /* Settings still work for this session. */ } }
@@ -19,6 +23,7 @@ const state = {view:'home',busy:false,stopped:false,memories:[],pronunciations:[
   recognizing:false,recognitionStarting:false,recognitionBlocked:'',recognitionFailures:0,recognitionRetryAt:0,
   voiceConversation:false,wakeUntil:0,speaking:false,speechSequence:0,lastVoicePlayback:'',dialog:null,refreshing:false};
 state.pendingAction=null;
+initializeAppearance({canRotate:()=>!state.busy&&!state.speaking&&!state.recognizing&&!state.dialog&&!state.pendingAction&&!document.querySelector('#message')?.value});
 let recognition=null, recognitionTimer=null, recognitionStartTimer=null, followUpTimer=null, toastTimer=null, speechWatchdog=null;
 const FOLLOW_UP_MS=60000;
 const speechCache=new Map();
@@ -49,7 +54,7 @@ async function api(path, body, timeout=12000, signal) {
   try {
     const response=await fetch(path,{method:body===undefined?'GET':'POST',
       headers:body===undefined?{}:{'Content-Type':'application/json'},
-      body:body===undefined?undefined:JSON.stringify({...body,session_id:SESSION_ID}),signal:controller.signal});
+      body:body===undefined?undefined:JSON.stringify({...body,session_id:SESSION_ID,...(ACTIVE_CHAT&&body.chat_id===undefined?{chat_id:ACTIVE_CHAT}:{})}),signal:controller.signal});
     const data=await response.json();
     if(!response.ok){const error=new Error((typeof data.result==='string'?data.result:data.error) || (data.requires_confirmation?'Please review and approve this action first.':'Request failed ('+response.status+').'));error.details=data;throw error;}
     return data;
@@ -63,7 +68,7 @@ async function chatApi(message,onDelta,attachments=[]) {
   const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),attachments.length?120000:75000);
   let reader;
   try {
-    const response=await fetch('/api/chat',{method:'POST',headers:{'Content-Type':'application/json',Accept:'application/x-ndjson'},body:JSON.stringify({message,session_id:SESSION_ID,...(attachments.length?{attachments}:{})}),signal:controller.signal});
+    const response=await fetch('/api/chat',{method:'POST',headers:{'Content-Type':'application/json',Accept:'application/x-ndjson'},body:JSON.stringify({message,session_id:SESSION_ID,...(ACTIVE_CHAT?{chat_id:ACTIVE_CHAT}:{}),...(attachments.length?{attachments}:{})}),signal:controller.signal});
     if(!response.ok){const data=await response.json();throw new Error(data.error || 'Chat request failed.');}
     if(!response.headers.get('Content-Type')?.includes('application/x-ndjson'))return await response.json();
     reader=response.body.getReader();const decoder=new TextDecoder();let buffer='',result=null;
@@ -81,7 +86,16 @@ const visualInputs=initializeVisionControls({request:api,onError:toast,onImagesC
   if(!info.activeSource && state.checkInVisual)cancelCheckIn();
 }});
 const abilityControls=initializeAbilities({request:api,onCommand:submitMessage,onReview:reviewAction,onError:toast});
+const chatLibrary=initializeChats({request:api,onError:toast,isBusy:()=>state.busy||state.preparingMessage||state.dialog||state.pendingAction||Boolean($('#message').value)||visualInputs.getChatAttachments().length>0,onSelect:async(id,messages)=>{
+  cancelCheckIn();stopSpeech();pauseRecognition();
+  let previous=ACTIVE_CHAT;try{previous=previous||sessionStorage.getItem('sara-session-chat');}catch{}
+  if(previous&&previous!==id){SESSION_ID=crypto.randomUUID();try{sessionStorage.setItem('sara-session-id',SESSION_ID);}catch{}}
+  try{sessionStorage.setItem('sara-session-chat',id);}catch{}
+  ACTIVE_CHAT=id;state.lastInteraction=Date.now();$('#messages').replaceChildren();
+  for(const item of messages){if(item.initiated_by!=='sara')addMessage(item.question||'','you','',item.time);const content=addMessage(item.answer||'','sara',item.provider,item.time);appendStepResults(content,item);}
+}});
 state.lastInteraction=Date.now();
+initializeProductivity({onError:toast,onCommand:submitMessage});
 
 function dateText(value, empty='Time not set') {
   const date=new Date(value);
@@ -181,7 +195,7 @@ async function submitMessage(message) {
     if(data.review_pending && data.action)void reviewAction(data.action);
     else if(state.speak) void speak(text);
   } catch(error) {addMessage(error.message,'sara','connection');if(!$('#message').value)$('#message').value=message;}
-  finally {setBusy(false);void refreshData();}
+  finally {setBusy(false);void refreshData();void chatLibrary.refresh().catch(()=>{});}
 }
 function resizeComposer() {const node=$('#message');node.style.height='auto';node.style.height=Math.min(node.scrollHeight,144)+'px';}
 
@@ -287,7 +301,7 @@ function renderAgenda() {
     if(!items.length) {empty(target,'No '+kind+' yet.',kind==='tasks'?'Small steps count. Add your first task above.':'Add one when you have something planned.');return;}
     for(const item of items) {
       const row=el('div','item-row'),copy=el('div','item-copy'),text=item.text||item.title;
-      copy.append(el('strong','',text),el('small','',kind==='tasks'?'Pending':dateText(item.start_at||item.due_at,'No notification time')));
+      copy.append(el('strong','',text),el('small','',kind==='tasks'?`${item.priority||'medium'} priority · ${item.category||'general'}${item.due_at?' · Due '+dateText(item.due_at):''}`:dateText(item.start_at||item.due_at,'No notification time')));
       if(kind==='tasks') row.append(actionButton('check','Complete task',{type:'complete_task',id:item.id,text,label:'Mark this task complete: '+text},'complete-button'));
       row.append(copy);
       row.append(actionButton('trash','Delete '+(kind==='tasks'?'task':kind==='events'?'event':'reminder'),
@@ -831,7 +845,9 @@ $('#start-conversation').addEventListener('click',()=>{
 $('#chat-form').addEventListener('submit',event=>{event.preventDefault();submitMessage($('#message').value);});
 $('#message').addEventListener('input',resizeComposer);
 $('#message').addEventListener('keydown',event=>{if(event.key==='Enter' && !event.shiftKey && !event.isComposing){event.preventDefault();$('#chat-form').requestSubmit();}});
-$('#task-form').addEventListener('submit',async event=>{event.preventDefault();const text=$('#task-text').value.trim();if(text && await reviewAction({type:'create_task',text,label:'Add this task to your local planner'}))$('#task-text').value='';});
+const taskOptions=el('div','productivity-row');taskOptions.innerHTML='<label>Priority <select id="task-priority"><option>medium</option><option>high</option><option>low</option></select></label><label>Category <select id="task-category"><option>general</option><option>work</option><option>study</option><option>shopping</option><option>personal</option></select></label><label>Due (optional) <input id="task-due" type="datetime-local"></label>';
+$('#task-form').append(taskOptions);
+$('#task-form').addEventListener('submit',async event=>{event.preventDefault();const text=$('#task-text').value.trim(),due=$('#task-due').value;if(due&&Number.isNaN(new Date(due).getTime()))return toast('Choose a valid due date.');if(text && await reviewAction({type:'create_task',text,priority:$('#task-priority').value,category:$('#task-category').value,...(due?{due_at:new Date(due).toISOString()}:{}),label:'Add this task to your local planner'}))$('#task-text').value='';});
 $('#memory-form').addEventListener('submit',async event=>{event.preventDefault();const text=$('#memory-text').value.trim();if(text && await reviewAction({type:'save_memory',text,label:'Remember this approved preference for future conversations'}))$('#memory-text').value='';});
 $('#memory-search').addEventListener('input',renderMemories);
 $('#pause-actions').addEventListener('click',()=>togglePause());
@@ -927,10 +943,8 @@ navigator.permissions?.query({name:'microphone'}).then(permission=>{
 $('#send-button').disabled=true;
 state.ready=true;
 void refreshData(true);
-try {for(const item of await api('/api/conversations',undefined,2500)){if(item.initiated_by!=='sara')addMessage(item.question||'','you','',item.time);const content=addMessage(item.answer||'','sara',item.provider,item.time);appendStepResults(content,item);}}
-catch {toast('Saved conversation could not load; new messages are still available.');}
-state.historyLoaded=true;scheduleWake();
-$('#send-button').disabled=false;
+try {await chatLibrary.load();state.historyLoaded=true;scheduleWake();$('#send-button').disabled=false;}
+catch {toast('Chats could not load. Refresh after starting SARA; chat is paused to protect conversation history.');}
 void api('/api/action-state?session_id='+encodeURIComponent(SESSION_ID)).then(data=>{if(data.pending && !state.pendingAction && !state.busy){const action={...data.pending.action,proposal_id:data.pending.id};attachProposal(addMessage('Is session ka ek action abhi approval ke liye pending hai.','sara','action-state'),action);}}).catch(()=>{});
 if(state.wake && !state.recognitionBlocked && !state.recognizing) {$('#voice-status').textContent=state.wakeGestureReady?listeningStatus():'Wake mode ready · tap microphone once to begin';scheduleWake();}
 setInterval(()=>{if(!document.hidden && !state.busy && !state.dialog)refreshData();},30000);
