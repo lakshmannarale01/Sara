@@ -194,6 +194,9 @@ export function initializeVisionControls({request, onError = () => {}, onImagesC
   void refreshVisionModel();
   updateMedia();
   return {
+    // Called only from a user-visible command response; permission remains browser-controlled.
+    startCamera() { if (cameraSupported) return startVisual('camera'); report(new Error('Camera access is unavailable in this browser.')); return Promise.resolve(); },
+    startScreen() { if (screenSupported) return startVisual('screen'); report(new Error('Screen sharing is unavailable in this browser.')); return Promise.resolve(); },
     getChatAttachments() {return queue.map(({data_url, source}) => ({data_url, source}));},
     // The caller gates optional check-ins with explicit proactive-vision consent.
     // This reads only an already shared stream, never the user's pasted images.

@@ -68,6 +68,12 @@ def execute_routine_action(action):
         return open_app(payload["app"], confirmed=True, executable=payload.get("executable"))
     if kind == "open_browser_url":
         return open_browser_url(payload["url"], confirmed=True)
+    if kind == "media_control":
+        from .system_controls import execute_media_control
+        return execute_media_control(payload["command"], level=payload.get("level"), confirmed=True)
+    if kind == "run_routine":
+        from .routines import execute_saved_routine
+        return execute_saved_routine(payload["id"], payload["revision"], payload["steps"], confirmed=True, automatic=True)
     from . import browser_control
     if kind == "browser_open":
         return browser_control.open_page(payload["url"], confirmed=True)

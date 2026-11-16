@@ -5,7 +5,7 @@ from urllib.parse import urlparse, unquote, parse_qs
 from urllib.parse import quote_plus
 from .config import ROOT, PORT, OLLAMA_URL
 from .storage import now, read_memories, write_memories, read_pronunciations, write_pronunciations, read_apps, write_apps, read_capability_requests, write_capability_requests, read_reminders, write_reminders, read_conversations, append_conversation, read_tasks, write_tasks, read_events, write_events, read_recent_activity, log, LOG_FILE, MEMORY_LOCK, TASK_LOCK, EVENT_LOCK, PRONUNCIATION_LOCK, APP_LOCK, CAPABILITY_REQUEST_LOCK
-from .ai import ask, request_performance, performance_snapshot, warmup_ollama
+from .ai import ask, request_performance, performance_snapshot, warmup_ollama, ask_visual_check_in
 from .speech import prepare_speech
 from .scheduling import parse_schedule_time
 from . import scheduling_dialogue
@@ -13,7 +13,7 @@ from .tools import open_url, open_browser_url, open_whatsapp_draft, open_app, op
 from .desktop import type_text, press_hotkey, click_point
 from .browser_control import open_page as semantic_open_page, click_text as semantic_click_text, fill_text as semantic_fill_text, whatsapp_send, shutdown_browser
 from .capabilities import capability_snapshot
-from .policy import inspect_action, is_stopped, set_stopped, access_mode, set_access_mode
+from .policy import inspect_action, is_stopped, set_stopped, access_mode, set_access_mode, ACTION_RISK
 from .vision import validate_attachments, attachment_summary, vision_status
 from .windows_speech import voice_status as windows_voice_status, synthesize as windows_synthesize
 from .console import trace as console_trace
@@ -25,6 +25,9 @@ from .reminder_delivery import deliver_due_reminders, reminder_file_lock
 from .intents import plan_youtube
 from .browser_control import play_youtube
 from .tools import execute_routine_action
+from .system_controls import read_audio_status, execute_media_control, normalize_media_payload
+from .routines import list_routines, save_routine, delete_routine, execute_saved_routine, normalize_steps
+from .ability_intents import plan_ability_command, is_audio_status_question
 
 _health_cache = {"checked_at": 0.0, "ollama": False, "model_available": False}
 _health_lock = threading.Lock()
@@ -395,7 +398,11 @@ class Handler(BaseHTTPRequestHandler):
             outcome = action_state.finish(session, executing, "completed" if succeeded else "failed", data)
             data["action_result"] = {"proposal_id": executing, "type": outcome["action"]["type"], "status": outcome["status"]}
             result_text = data.get("result") if isinstance(data.get("result"), str) else data.get("error") or ("Action completed." if succeeded else "Action failed; its result needs review.")
-            append_conversation({"time": now(), "question": "[Approved action] " + outcome["action"]["type"], "answer": result_text, "provider": "tool-result", "action_result": data["action_result"]})
+            saved_outcome = {"time": now(), "question": "[Approved action] " + outcome["action"]["type"], "answer": result_text, "provider": "tool-result", "action_result": data["action_result"]}
+            if isinstance(data.get("step_results"), list):
+                saved_outcome["step_results"] = data["step_results"][:8]
+                saved_outcome["total_steps"] = data.get("total_steps", len(saved_outcome["step_results"]))
+            append_conversation(saved_outcome)
             log("action_result", {**data["action_result"], "result": result_text})
         if urlparse(self.path).path == "/api/chat" and isinstance(data, dict) and data.get("reply"):
             salutation = approved_salutation(read_memories())
@@ -425,6 +432,9 @@ class Handler(BaseHTTPRequestHandler):
             turn = {"time": now(), "question": question, "answer": answer, "provider": provider}
             if getattr(self, "chat_attachments", None): turn["attachments"] = attachment_summary(self.chat_attachments)
             if data.get("action_result"): turn["action_result"] = data["action_result"]
+            if isinstance(data.get("tool_result"), dict) and isinstance(data["tool_result"].get("step_results"), list):
+                turn["step_results"] = data["tool_result"]["step_results"][:8]
+                turn["total_steps"] = data["tool_result"].get("total_steps", len(turn["step_results"]))
             append_conversation(turn)
             log("conversation", {"question": question, "answer": answer, "provider": provider})
             self.trace(f"Boss: {question}")
@@ -445,6 +455,8 @@ class Handler(BaseHTTPRequestHandler):
         return payload
     def do_GET(self):
         path = urlparse(self.path).path
+        if path == "/api/audio/status": return self.send_json(200, read_audio_status())
+        if path == "/api/routines": return self.send_json(200, {"routines": list_routines()})
         if path == "/api/vision/status": return self.send_json(200, vision_status(force=parse_qs(urlparse(self.path).query).get("refresh") == ["1"]))
         if path == "/api/voices/windows": return self.send_json(200, windows_voice_status())
         if path == "/api/access-mode": return self.send_json(200, {"mode": access_mode(), "stopped": is_stopped()})
@@ -495,7 +507,7 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/performance": return self.send_json(200, performance_snapshot())
         if path == "/api/capabilities": return self.send_json(200, capability_snapshot())
         if path == "/api/policy":
-            return self.send_json(200, {"stopped": is_stopped(), "actions": {name: inspect_action(name) for name in ("create_reminder", "delete_reminder", "create_task", "complete_task", "delete_task", "create_event", "delete_event", "save_memory", "approve_memory", "update_memory", "delete_memory", "save_pronunciation", "delete_pronunciation", "add_custom_app", "delete_custom_app", "save_capability_request", "delete_capability_request", "write_file", "delete_file", "open_app", "open_browser_url", "browser_click_text", "browser_fill", "type_text", "hotkey", "click_point", "email_draft", "whatsapp_send")}})
+            return self.send_json(200, {"stopped": is_stopped(), "access_mode": access_mode(), "actions": {name: inspect_action(name) for name in ACTION_RISK}})
         if path == "/api/desktop/status":
             try:
                 import pyautogui
@@ -553,13 +565,23 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send_json(200, {"mode": mode, "stopped": is_stopped()})
             if path == "/api/check-in":
                 if not session: return self.send_json(400, {"error": "A dashboard session is required."})
+                provider = "local-check-in"
+                images = []
                 if data.get("kind") == "greeting":
                     reply = "नमस्ते, मैं सारा हूँ। बताइए, क्या करना है? मैं आपकी बात सुनने के लिए तैयार हूँ।"
+                elif data.get("visual") is True:
+                    images = validate_attachments(data.get("attachments", []))
+                    if len(images) != 1 or images[0]["source"] not in {"screen", "camera"}:
+                        return self.send_json(400, {"error": "A visual check-in requires one explicitly shared screen or camera snapshot."})
+                    reply, provider = ask_visual_check_in(images)
+                    if not reply: return self.send_json(200, {"reply": "", "provider": provider, "skipped": True})
                 else:
                     reply, _ = agenda_reply("एक छोटा check-in")
-                append_conversation({"time": now(), "question": "[SARA check-in]", "answer": reply, "provider": "local-check-in", "initiated_by": "sara"})
-                log("conversation", {"question": "[SARA check-in]", "answer": reply, "provider": "local-check-in", "initiated_by": "sara"})
-                return self.send_json(200, {"reply": reply, "provider": "local-check-in"})
+                turn = {"time": now(), "question": "[SARA check-in]", "answer": reply, "provider": provider, "initiated_by": "sara"}
+                if images: turn["attachments"] = attachment_summary(images)
+                append_conversation(turn)
+                log("conversation", {key: value for key, value in turn.items() if key != "time"})
+                return self.send_json(200, {"reply": reply, "provider": provider})
             if path == "/api/actions/cancel":
                 if not session: return self.send_json(400, {"error": "A dashboard session is required."})
                 cancelled = action_state.cancel(session, data.get("proposal_id"))
@@ -571,6 +593,7 @@ class Handler(BaseHTTPRequestHandler):
                 set_stopped(False); log("sara_resumed", {"source": "dashboard"})
                 return self.send_json(200, {"stopped": False})
             action_by_path = {
+                "/api/actions/media-control": "media_control", "/api/routines": "save_routine",
                 "/api/memories": "save_memory", "/api/pronunciations": "save_pronunciation", "/api/apps": "add_custom_app", "/api/capability-requests": "save_capability_request", "/api/reminders": "create_reminder", "/api/tasks": "create_task", "/api/events": "create_event",
                 "/api/files/write": "write_file", "/api/files/delete": "delete_file",
                 "/api/actions/open-browser-url": "open_browser_url", "/api/actions/whatsapp-draft": "whatsapp_draft",
@@ -583,6 +606,8 @@ class Handler(BaseHTTPRequestHandler):
                 "/api/tools/open-url": "open_browser_url",
             }
             route_action = action_by_path.get(path)
+            if not route_action and path.startswith("/api/routines/") and path.endswith("/run"): route_action = "run_routine"
+            if not route_action and path.startswith("/api/routines/") and path.endswith("/delete"): route_action = "delete_routine"
             if not route_action and path.startswith("/api/memories/") and path.endswith("/approve"): route_action = "approve_memory"
             if not route_action and path.startswith("/api/memories/") and path.endswith("/update"): route_action = "update_memory"
             if not route_action and path.startswith("/api/memories/") and path.endswith("/delete"): route_action = "delete_memory"
@@ -594,6 +619,15 @@ class Handler(BaseHTTPRequestHandler):
             if not route_action and path.startswith("/api/tasks/") and path.endswith("/delete"): route_action = "delete_task"
             if not route_action and path.startswith("/api/events/") and path.endswith("/delete"): route_action = "delete_event"
             if route_action:
+                if route_action in {"media_control", "save_routine", "delete_routine", "run_routine"} and not session:
+                    return self.send_json(400, {"error": "A dashboard session is required for this action."})
+                if route_action == "media_control":
+                    normalize_media_payload({key: value for key, value in data.items() if key not in {"session_id", "proposal_id", "confirmed"}})
+                if route_action in {"save_routine", "delete_routine", "run_routine"}:
+                    allowed_fields = {"name", "steps", "id", "revision"} if route_action in {"save_routine", "run_routine"} else {"id", "revision"}
+                    if set(data) - allowed_fields - {"session_id", "proposal_id", "confirmed"}:
+                        raise ValueError("This routine request contains unsupported fields.")
+                    if route_action == "save_routine": normalize_steps(data.get("steps"))
                 verdict = inspect_action(route_action, data.get("confirmed") is True, payload=data)
                 if not verdict["allowed"]: return self.send_json(409, {**verdict, "request": data})
                 if session:
@@ -606,11 +640,11 @@ class Handler(BaseHTTPRequestHandler):
                         actual = {key: value for key, value in data.items() if key not in {"session_id", "proposal_id", "confirmed"}}
                         if expected != actual:
                             return self.send_json(409, {"error": "Action details changed after review. Request and review the action again."})
-                        if proposal["action"].get("id") and proposal["action"]["id"] != unquote(path).split("/")[-2]:
+                        if route_action != "save_routine" and proposal["action"].get("id") and proposal["action"]["id"] != unquote(path).split("/")[-2]:
                             return self.send_json(409, {"error": "Selected item changed after review."})
                     else:
                         reviewed = {key: value for key, value in data.items() if key not in {"session_id", "confirmed", "proposal_id", "type"}}
-                        if route_action in {"approve_memory", "delete_memory", "update_memory", "delete_pronunciation", "delete_custom_app", "delete_capability_request", "delete_reminder", "delete_task", "complete_task", "delete_event"}: reviewed["id"] = path.split("/")[-2]
+                        if route_action in {"approve_memory", "delete_memory", "update_memory", "delete_pronunciation", "delete_custom_app", "delete_capability_request", "delete_reminder", "delete_task", "complete_task", "delete_event", "run_routine", "delete_routine"}: reviewed["id"] = path.split("/")[-2]
                         proposal = action_state.propose(session, {**reviewed, "type": route_action})
                         proposal_id = proposal["id"]
                     try: action_state.begin(session, proposal_id)
@@ -669,6 +703,14 @@ class Handler(BaseHTTPRequestHandler):
                     self.ai_timing = request_performance()
                     return self.send_json(200, {"reply": reply, "provider": provider, "attachments": attachment_summary(attachments)})
                 lower = message.lower()
+                if re.search(r"(?:camera|कैमरा).*(?:open|start|चालू|खोल)|(?:photo|फोटो|तस्वीर).*(?:capture|ले|खींच)", lower):
+                    return self.send_json(200, {"reply": "Camera access ke liye neeche Camera button dabaiye. Browser permission allow karne ke baad Capture frame dabakar photo mujhe bhej sakte hain; main bina aapki permission camera nahi chalaungi.", "provider": "visual-control", "visual_request": "camera"})
+                ability = plan_ability_command(message)
+                if ability: return self.send_json(200, ability)
+                if is_audio_status_question(message):
+                    audio = read_audio_status()
+                    reply = f"Speaker volume {audio['volume']}%, {'muted' if audio['muted'] else 'unmuted'}." if audio.get("available") else audio.get("reason") or audio.get("error") or "Windows audio status is unavailable."
+                    return self.send_json(200, {"reply": reply, "provider": "audio-status", "audio": audio})
                 youtube = plan_youtube(message)
                 if youtube: return self.send_json(200, youtube)
                 confirmation = short_confirmation(message)
@@ -1218,6 +1260,20 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/api/tools/open-url":
                 if not data.get("confirmed"): return self.send_json(409, {"requires_confirmation": True, "risk": "This opens a browser window."})
                 return self.send_json(200, {"result": open_url(str(data.get("url", "")))})
+            if path == "/api/actions/media-control":
+                result = execute_media_control(data.get("command"), level=data.get("level"), confirmed=True)
+                return self.send_json(200 if result.get("ok") else 502, result)
+            if path == "/api/routines":
+                result = save_routine(data.get("name"), data.get("steps"), confirmed=data.get("confirmed") is True, id=data.get("id"), revision=data.get("revision"))
+                return self.send_json(200 if result.get("ok") else 409, result)
+            if route_action == "run_routine":
+                if data.get("id") != path.split("/")[-2]: return self.send_json(400, {"error": "Routine ID does not match the requested path."})
+                result = execute_saved_routine(data.get("id"), data.get("revision"), data.get("steps"), confirmed=True, automatic=verdict.get("automatic", False))
+                return self.send_json(200 if result.get("ok") else 409, result)
+            if route_action == "delete_routine":
+                if data.get("id") != path.split("/")[-2]: return self.send_json(400, {"error": "Routine ID does not match the requested path."})
+                result = delete_routine(data.get("id"), data.get("revision"), confirmed=data.get("confirmed") is True)
+                return self.send_json(200 if result.get("ok") else 409, result)
             if path == "/api/actions/open-browser-url":
                 verdict = inspect_action("open_browser_url", bool(data.get("confirmed")), payload=data)
                 if not verdict["allowed"]: return self.send_json(409, verdict)

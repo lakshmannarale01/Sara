@@ -19,12 +19,15 @@ SARA is an AI, not a human or conscious being. It must not pretend to have real 
   - `config.py` — paths and settings.
   - `storage.py` — approved memories and activity logs.
   - `ai.py` — Ollama first, OpenAI optional, safe-local fallback.
-  - `tools.py` — allowlisted, confirmation-gated tools.
+  - `tools.py` — allowlisted tools, scoped trusted routines and reviewed consequential actions.
   - `server.py` — HTTP API and static asset serving.
   - `intents.py` — deterministic pending/action/Notepad intent handling.
   - `action_state.py` — session-scoped proposal lifecycle, expiry and actual outcomes.
   - `notes.py` — unique UTF-8 notes, readback verification and exact-path Notepad launch.
   - `reminder_delivery.py` — cross-process reminder claims, per-user Windows notification delivery, retry tracking and file locking shared by the server and optional scheduled worker.
+  - `system_controls.py` / `system_audio.ps1` — strict named media actions, fixed Windows CoreAudio bridge, volume/mute readback and truthful media-key dispatch.
+  - `routines.py` — local named workflow storage, revision-bound plans, bounded step validation and per-step execution evidence.
+  - `ability_intents.py` — deterministic audio status and routine create/run/list commands.
 - Frontend: `index.html`, `assets/dashboard.css`, `assets/hud-theme.css`, `assets/dashboard.js`, `assets/hud-core.js`, `assets/action-router.js`.
 - The current interface is a procedural cyan/orange Jarvis HUD inspired by the user's video reference. Canvas draws moving rings, ticks and sweeps; the rendered UI does not load portrait images or video. Older art files remain unused.
 - HUD states are ready, thinking, listening, speaking and review. Speaking starts on actual playback events; decorative idle rotation does not mean SARA is speaking.
@@ -39,7 +42,15 @@ SARA is an AI, not a human or conscious being. It must not pretend to have real 
 - Dashboard chat and wake listening wait until saved conversation history has loaded, preventing new input from racing against history rendering.
 - Read-only system readiness is available through chat and reports Ollama, desktop control, browser runtime, approved-memory count, and pending reminders.
 - Startup attempts to start a reachable local Ollama service when needed, locating its CLI on PATH or in common Windows install folders. Health status distinguishes a running service from an installed configured model; SARA does not download models automatically.
-- Windows app launch supports built-in Chrome/Notepad/Calculator plus user-registered absolute `.exe` shortcuts in local `sara_data/apps.json`; every launch requires confirmation and does not accept arguments.
+- Windows app launch supports built-in Chrome/Notepad/Calculator plus user-registered absolute `.exe` shortcuts in local `sara_data/apps.json`. Persisted Trusted routines can launch the built-in apps directly after a fresh policy/Stop check; custom executables always retain review. App launches accept no arguments or shell commands.
+- Trusted routines also cover narrowly validated YouTube navigation/playback requests, Google/Bing searches and Wikipedia article URLs. Other URLs, sends, writes, deletes and focused-window input stay reviewed. Automatic chat actions retain a session-scoped proposal and a separately recorded actual tool outcome.
+- Windows audio controls add absolute 0–100% volume, bounded up/down, mute/unmute and fixed media transport keys. CoreAudio results include readback; media keys report dispatch without claiming player-state verification. `GET /api/audio/status` is read-only; `POST /api/actions/media-control` follows action policy and the session proposal lifecycle.
+- Named routines are saved only after exact review in `sara_data/routines.json`, with a maximum of 30 routines/eight bounded steps. Steps permit built-in apps, approved routine navigation/searches, YouTube and media controls. Content revisions bind save/update/delete/run; every step checks Stop and automatic runs recheck trusted permission. Concurrent runs and changed/deleted plans are rejected, and partial results retain prior tool evidence. No personal routine is seeded automatically.
+- `assets/abilities-client.js` / `abilities-controls.css` add Settings audio controls and a routine builder/list. Chat examples include `create routine work mode: open notepad; volume 30 percent karo`, `run routine work mode`, and `meri routines`. Save/update/delete remains reviewed; trusted runs use the exact stored snapshot and display/persist per-step outcomes.
+- The 16 November media/routine pass completed 343 isolated offline tests and twelve browser checks. The restarted server reports local AI/trusted mode/audio readiness and no seeded routines. These checks mock native changes; actual volume/media effects and app launches require separate acceptance evidence in the status ledger.
+- Visual chat supports PNG/JPEG/WebP paste/drop/upload, bounded previews/removal and explicit screen/camera sharing with Stop. Shared images are validated, metadata is stripped and snapshots go only to a verified loopback Ollama vision model; image bytes are not persisted or sent to the optional cloud provider. `gemma3:4b` is installed on this laptop; consult the status ledger for live model acceptance evidence.
+- Start conversation enables spoken replies and the hands-free session, then requests a local greeting. Installed WinRT/OneCore voices can produce WAV playback even if the browser does not expose a voice. The user confirmed hearing the standalone Kalpana test; dashboard sound, accent and perceived motion/audio synchronization still need their own live checks.
+- Optional proactive conversation uses local agenda check-ins at a chosen 5/15/30/60-minute idle interval and pauses while busy, speaking, reviewing or hidden. A separate visual check-in checkbox must be enabled before an already shared screen/camera can supply periodic snapshots. These check-ins do not grant new capture permission, execute actions or silently create memory.
 - Missing capability conversations can offer to save an approved local feature request in `sara_data/capability_requests.json`; this is a development backlog, not self-modifying code.
 - Local tasks and reminder-aware daily plans are available through confirmation-gated chat workflows and persist in `sara_data/tasks.json`.
 - Reminders can also be checked when the dashboard is closed by enabling the per-user Windows Scheduled Task with `install_sara_reminders.ps1`; it runs the one-shot `sara_reminder_worker.py` once a minute while the user is signed in. Remove it with `uninstall_sara_reminders.ps1`. The server watcher and scheduled worker share a lock so only one process claims each notification at a time.
@@ -51,7 +62,7 @@ SARA is an AI, not a human or conscious being. It must not pretend to have real 
 
 ## Current AI provider
 
-Ollama is preferred because the user wants a free option and has installed it. The default model is `llama3.2`.
+Ollama is preferred because the user wants a free option and has installed it. The default text model is `llama3.2`. Image inputs require an installed model advertising `vision`; the local installation includes `gemma3:4b` (3.4 GB). Real generated-image checks recognized basic colors, positions and shapes, but took about 33–60 seconds, included one shape error and did not consistently follow Hindi-output instructions. The status ledger retains the exact observed results and limits.
 
 Start Ollama/model if needed:
 
@@ -61,7 +72,7 @@ ollama run llama3.2
 
 The application tries Ollama first, then an optional `OPENAI_API_KEY`, then safe-local fallback. Text is streamed over NDJSON to the dashboard. Routine replies default to 192 output tokens, detailed requests to 512, and recent history is capped at 1600 characters/up to four turns. Compact capability data and up to six relevant approved memories enter the prompt. The model preloads in a background thread and stays resident for 15 minutes by default; failed local requests use a 15-second retry cooldown. See setup guide for environment overrides.
 
-Speech preparation lives in `sara_app/speech.py` and does not call an AI model. Its `playback` plan keeps mixed sentences together, merges same-voice sentences into bounded passages and adds conservative technical Hindi phonetics. Hindi context stays within each sentence so adjacent English instructions such as "Use the main window" remain English. Known acronyms expand and Markdown/code blocks are cleaned; unfamiliar names/Latin words are preserved. The AI prompt prefers Devanagari Hindi/Hinglish. Approved say-as preferences in `sara_data/pronunciations.json` affect speech only, and changing them invalidates prepared-speech caches immediately. A native queue that never starts fails after 15 seconds; valid ongoing long speech remains event-driven. The avatar stays visible in a compact strip during chat and enters its speaking state only on actual playback start events.
+Speech preparation lives in `sara_app/speech.py` and does not call an AI model. Its `playback` plan keeps mixed sentences together, merges same-voice sentences into bounded passages and adds conservative technical Hindi phonetics. Hindi context stays within each sentence so adjacent English instructions such as "Use the main window" remain English. Known acronyms expand and Markdown/code blocks are cleaned; unfamiliar names/Latin words are preserved. The AI prompt prefers Devanagari Hindi/Hinglish. Approved say-as preferences in `sara_data/pronunciations.json` affect speech only, and changing them invalidates prepared-speech caches immediately. A browser speech queue that never starts fails after 15 seconds; valid ongoing long speech remains event-driven. Local Windows WAV is available through `windows_speech.py` and a fixed PowerShell WinRT bridge. The live HUD enters its speaking state on actual browser audio/TTS playback-start events.
 
 Hands-free intent is separate from temporary capture pauses. One mic click enables a continuing conversation, and 60-second direct follow-up time starts after reply playback finishes. Recognition has starting/owner guards, transient retry backoff, permission/device blocks, explicit user Stop, visibility rearming and an idle speech completion watchdog. No actual microphone recording is performed by regression tests; browser tests use controlled mocks.
 
@@ -105,7 +116,7 @@ __pycache__/
 3. Keep system voice selection and Hindi/Hinglish speech natural across browser restarts.
 4. Add long-term approved memory and learning.
 5. Add safe computer/app/file control with confirmations.
-6. Add a more natural animated character and lip-sync after voice is implemented.
+6. Improve the procedural HUD's actual playback synchronization and interruptible voice; retain the user's latest no-portrait UI direction.
 
 ## Important next task
 

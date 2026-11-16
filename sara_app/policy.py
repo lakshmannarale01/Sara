@@ -19,6 +19,7 @@ ACTION_RISK = {
     "write_file": "high", "delete_file": "critical",
     "open_app": "medium", "notepad_write": "high", "open_browser_url": "medium",
     "browser_open": "medium", "youtube_play": "medium", "browser_click_text": "high", "browser_fill": "high",
+    "media_control": "low", "save_routine": "medium", "delete_routine": "medium", "run_routine": "medium",
     "type_text": "high", "hotkey": "high", "click_point": "high",
     "email_draft": "high", "whatsapp_draft": "high", "whatsapp_send": "critical",
 }
@@ -60,6 +61,20 @@ def routine_action(action, payload=None):
     """
     if not isinstance(payload, dict):
         return False
+    if action == "media_control":
+        from .system_controls import normalize_media_payload
+        try:
+            normalize_media_payload({key: value for key, value in payload.items() if key not in {"session_id", "proposal_id", "confirmed", "type", "label"}})
+            return True
+        except (ValueError, TypeError):
+            return False
+    if action == "run_routine":
+        from .routines import validate_run_payload
+        try:
+            validate_run_payload({key: value for key, value in payload.items() if key not in {"session_id", "proposal_id", "confirmed", "type", "label"}})
+            return True
+        except (ValueError, TypeError):
+            return False
     if action == "youtube_play":
         query = payload.get("query")
         return isinstance(query, str) and 0 < len(query.strip()) <= 200 and not any(ord(c) < 32 for c in query)

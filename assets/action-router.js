@@ -12,6 +12,10 @@ export function actionRequest(action) {
     case 'notepad_write': path='/api/actions/notepad-write'; body={text:a.text}; break;
     case 'browser_open': path='/api/actions/browser-open'; body={url:a.url}; break;
     case 'youtube_play': path='/api/actions/youtube-play'; body={query:a.query}; break;
+    case 'media_control': path='/api/actions/media-control'; body={command:a.command,...(a.level!==undefined?{level:a.level}:{})}; break;
+    case 'save_routine': path='/api/routines'; body={name:a.name,steps:a.steps,...(a.id?{id:a.id,revision:a.revision}:{})}; break;
+    case 'delete_routine': path='/api/routines/'+id()+'/delete'; body={id:a.id,revision:a.revision}; break;
+    case 'run_routine': path='/api/routines/'+id()+'/run'; body={id:a.id,name:a.name,revision:a.revision,steps:a.steps}; break;
     case 'browser_click_text': path='/api/actions/browser-click-text'; body={url:a.url,text:a.text}; break;
     case 'browser_fill': path='/api/actions/browser-fill'; body={url:a.url,label:a.label,value:a.value}; break;
     case 'whatsapp_send': path='/api/actions/whatsapp-send'; body={phone:a.phone,text:a.text}; break;
@@ -50,8 +54,12 @@ export function actionDetails(action) {
     url:'Website',query:'YouTube search / first video',path:'File path',content:'Full file content',app:'Application',name:'Shortcut name',executable:'Executable path',title:'Request',description:'What SARA should learn to do',label:'Field',
     value:'Value to enter',keys:'Keyboard shortcut',x:'Screen X',y:'Screen Y',title:'Event',
     capability_key:'Capability',current_status:'Current status',required_access:'Required access',implementation_plan:'Implementation plan',
-    start_at:'Starts at',due_at:'Reminder time'};
+    start_at:'Starts at',due_at:'Reminder time',command:'Media command',level:'Volume percent',steps:'Exact routine steps',revision:'Reviewed version'};
   const displayValue=(key,value)=>{
+    if(key==='steps' && Array.isArray(value))return value.map((step,index)=>{
+      const kind=humanStepName(step.type),details=Object.entries(step).filter(([field])=>field!=='type').map(([field,item])=>field+': '+String(item)).join(' · ');
+      return (index+1)+'. '+kind+(details?' — '+details:'');
+    }).join('\n');
     if(['due_at','start_at'].includes(key) && typeof value==='string'){
       const moment=new Date(value);
       if(!Number.isNaN(moment.getTime()))return moment.toLocaleString(undefined,{dateStyle:'medium',timeStyle:'short'})+' ('+Intl.DateTimeFormat().resolvedOptions().timeZone+')\n'+value;
@@ -63,3 +71,5 @@ export function actionDetails(action) {
   if (action.id && !action.old_text) details.unshift(['Selected item',action.text || action.title || action.label || action.id]);
   return details;
 }
+
+function humanStepName(value) {return String(value || 'Step').replaceAll('_',' ');}

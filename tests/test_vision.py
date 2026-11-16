@@ -68,6 +68,9 @@ class AttachmentValidationTests(unittest.TestCase):
             {"data_url": "data:image/png;base64,not-base64"},
             {"data_url": "data:image/png;base64,AA=="},
             dict(image_attachment(), source="background-spy"),
+            dict(image_attachment(), source={}),
+            dict(image_attachment(), source=[]),
+            dict(image_attachment(), source=None),
         ]
         for value in values:
             with self.subTest(value=value), self.assertRaises(ValueError):

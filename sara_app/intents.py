@@ -228,6 +228,10 @@ def action_payload(action):
     if kind == "create_event":
         return dict(action.get("event") or {})
     fields = {
+        "media_control": ("command", "level"),
+        "save_routine": ("name", "steps", "id", "revision"),
+        "delete_routine": ("id", "revision"),
+        "run_routine": ("id", "name", "revision", "steps"),
         "open_app": ("app", "executable"), "notepad_write": ("text",), "open_browser_url": ("url",), "browser_open": ("url",), "youtube_play": ("query",),
         "browser_click_text": ("url", "text"), "browser_fill": ("url", "label", "value"),
         "whatsapp_send": ("phone", "text"), "whatsapp_draft": ("phone", "text"), "email_draft": ("to", "subject", "body"),

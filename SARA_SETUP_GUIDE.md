@@ -12,9 +12,11 @@ For the product target, implemented features, verification evidence and remainin
 | Python 3.11+ | Backend server and local tools | Yes |
 | Ollama | Local AI chat provider; no OpenAI API cost | Recommended |
 | `llama3.2` Ollama model | Default SARA chat model | Recommended |
+| Vision-capable Ollama model, such as `gemma3:4b` | Understand attached images and shared snapshots locally | Only for image/screen/camera understanding |
 | Internet | First-time Python/Playwright downloads and weather/browser pages | Recommended |
 | Chromium runtime | Semantic browser actions | Installed by setup flow |
 | Microphone permission | Voice input | Only for voice |
+| Browser camera permission or screen picker | Explicit camera/screen sharing | Only when you start sharing |
 
 ## 2. First-time installation
 
@@ -41,6 +43,8 @@ The normal shortcut performs the dependency steps automatically:
 
 `start_sara.bat` creates `.venv`, installs `requirements.txt`, installs the Chromium runtime separately, and starts `sara_server.py`. The `.venv` folder is machine-specific and must not be copied between laptops.
 
+After pulling updates into an existing environment, run `.\.venv\Scripts\python.exe -m pip install -r requirements.txt` once so new dependencies such as Pillow are present even if the launcher already has its ready marker.
+
 ## 3. Ollama setup
 
 Install Ollama from its official Windows installer, then run:
@@ -56,6 +60,14 @@ ollama list
 ```
 
 When SARA starts, it checks whether the local Ollama service is reachable. If not, it starts `ollama serve` when the Ollama CLI is installed, then warms the configured model in the background. SARA does not download models automatically; install the default model once with `ollama run llama3.2`. It tries Ollama first, then optional OpenAI, then the local-safe fallback.
+
+For local image understanding on a new laptop, install a vision-capable model explicitly:
+
+```powershell
+ollama pull gemma3:4b
+```
+
+This laptop has `gemma3:4b` installed (3.4 GB observed on 16 November 2026), and generated-image questions returned actual local model responses. Basic colors/positions/shapes were recognized, but observed requests took about 33–60 seconds and exposed shape/language-following errors. The default `llama3.2` is text-only. SARA checks installed models' vision capability and reports readiness beside the image controls; refresh that status after an installation. Set `SARA_VISION_MODEL` to prefer a particular installed vision model. Image requests use loopback Ollama only, never the optional cloud fallback. Exact evidence is recorded in [SARA_PROJECT_STATUS.md](SARA_PROJECT_STATUS.md).
 
 ## 4. Optional OpenAI configuration
 
@@ -81,7 +93,7 @@ Copying the project preserves code and static assets. Do not copy `.venv` or sec
 
 - `.venv/`: Python dependencies
 - Playwright Chromium runtime: installed in the user profile by `playwright install chromium`
-- `sara_data/`: memories, reminders, and activity logs
+- `sara_data/`: memories, conversations, planner items, saved routines, access preference and activity logs
 - `sara_data/browser_profile/`: SARA's separate browser session and site logins
 
 On a new laptop, log in again inside SARA's controlled Chromium profile for WhatsApp Web or other websites. Credentials and cookies are not stored in the repository.
@@ -93,7 +105,7 @@ On a new laptop, log in again inside SARA's controlled Chromium profile for What
 3. SARA loads the dashboard at port `8765`.
 4. Ollama handles local chat when available.
 5. Voice input uses browser microphone permission and spoken replies are enabled by default. SARA chooses female-sounding system voices when available and defaults to 1.15× speed. System playback keeps a mixed Hindi/English sentence together rather than switching voices on each English word. For Hindi/Hinglish replies, SARA asks the AI to write Hindi words in Devanagari while keeping technical English and product names in Latin script; common action, memory, calendar, task and capability replies follow the same pattern. Common Roman-Hindi words from older replies are converted locally; custom names can use a pronunciation rule. In Settings, `Natural AI voice` is optional: it needs `OPENAI_API_KEY`, Internet and API credits. Use `Test system voice` to hear the selected Windows voice.
-6. Browser and desktop actions return a confirmation request before execution.
+6. Browser and desktop changes are reviewed by default. In Settings → Routine action access, Trusted routines permits only bounded YouTube/search/article navigation and built-in app launches without repeated review. Pause/revocation is checked for each execution; sends, deletes, writes, custom executables and focused-window input remain reviewed.
 7. Chat questions and answers print in the terminal as `Boss:` and `SARA:` lines and are written to `sara_data/activity.jsonl`; saved turns appear in the chat panel after reload and in Recent activity. Ask `Sara ka system status batao` for a read-only readiness summary. Tasks persist in `sara_data/tasks.json` and can be added, completed, or deleted with confirmation, then used for a daily plan. Local events persist in `sara_data/events.json`; try `schedule team sync tomorrow at 5 pm` and confirm, then use `calendar dikhao` to list them.
 8. SARA can prepare a reviewable email draft with `draft email to name@example.com subject: Update body: ...`; it opens the default mail app only after confirmation and never presses Send automatically.
 9. SARA can help edit safe project text files after confirmation, for example `write file demo.py: print("Hello")`. Secrets, runtime data, and traversal paths are blocked.
@@ -119,8 +131,8 @@ On a new laptop, log in again inside SARA's controlled Chromium profile for What
 # Direct server start
 .\.venv\Scripts\python.exe sara_server.py
 
-# Run tests
-.\.venv\Scripts\python.exe -m unittest discover -s tests -v
+# Run offline tests with personal data isolated
+.\.venv\Scripts\python.exe tests\run_offline.py
 
 # Check Python syntax
 $files = @("sara_server.py") + (Get-ChildItem sara_app -Filter *.py | ForEach-Object { $_.FullName })
@@ -130,6 +142,26 @@ $files = @("sara_server.py") + (Get-ChildItem sara_app -Filter *.py | ForEach-Ob
 ollama list
 ```
 
+### Audio controls and named workflows
+
+Open **Settings & controls → Audio & saved routines** for Windows output status, volume/media controls and the routine builder. These use fixed Windows CoreAudio/media adapters; no API key, administrator grant or user-provided shell script is needed.
+
+Examples to type or say:
+
+```text
+volume status
+volume 30 percent karo
+mute karo
+next song
+create routine work mode: open notepad; volume 30 percent karo
+run routine work mode
+meri routines
+```
+
+Review the full name and step list before saving. Routines remain local in `sara_data/routines.json`, support at most 30 named workflows/eight steps each, and have no prefilled personal defaults. The builder creates bounded app, approved navigation/search, YouTube and media steps; use Run routine or Review removal from the saved list. Storage updates/removal stay reviewed. In Trusted mode, the current exact saved revision can run directly; Stop, permission revocation and stale changes prevent further steps, and partial results show what completed before a failure.
+
+Speaker volume/mute uses actual output readback. Media transport only proves a fixed key was sent, not that a particular song/player changed state. The new module tests and read-only Windows status probe do not establish real mutation or app-playback outcomes; consult the latest verification ledger before making that claim.
+
 ## 9. Troubleshooting
 
 - `package.json` missing: this is a Python project; do not run `npm install` from the project root.
@@ -138,10 +170,15 @@ ollama list
 - Browser actions fail: run `.\.venv\Scripts\python.exe -m playwright install chromium` and log in again in SARA's profile.
 - Typing goes to the wrong window: wait for the app-open action to finish, keep the intended window focused, then confirm the typing action. SARA now waits briefly after launching an allowlisted app.
 - Notepad was claimed open but nothing happened: use a new request after restarting the updated server. Pending action follow-ups now reopen the exact review; click `Approve action` to execute. Look for the separate tool-result message. If saving succeeds but launch fails, `Read saved note` remains available and the outcome says launch failed. Generic AI replies are not execution proof.
-- Voice does not work: allow microphone permission and reload the dashboard.
+- Voice input does not work: allow microphone permission, click Start conversation or the mic, and retry. Speaker output is a separate path; microphone permission does not fix a muted or blocked speaker.
 - Mic needs repeated clicks: click it once to start hands-free conversation. SARA pauses capture while replying and resumes automatically afterwards; direct follow-ups are accepted for 60 seconds **after playback finishes**. After that, say `Sara` again; the microphone stays armed. Temporary recognition/network errors retry automatically with a short backoff. Clicking the active mic explicitly stops hands-free mode; permission/device/language errors still need their indicated correction. Returning to the tab resumes an enabled session.
 - Voice pauses between words: system speech now uses sentence/phrase playback units, avoiding tiny language-switch utterances. A reply can still pause naturally at sentence or long-passage boundaries. The speech watchdog restores listening if the engine becomes idle without sending its completion event; it does not cut off speech based on a guessed text duration.
-- SARA does not speak or sounds robotic: open Settings, keep `Speak replies aloud` enabled, choose an installed voice such as Microsoft Kalpana, and click `Test system voice`. SARA remembers the selected voice by its URI and falls back to voice name/language if Windows or Edge changes that URI; if the voice is unavailable, diagnostics identify the fallback without erasing your choice. `Natural AI voice` is available only with `OPENAI_API_KEY` and uses API credits. The voice speed slider defaults to 1.15×; old manually saved speeds remain unchanged. Browser audio can require one click after page load.
+- SARA does not speak or sounds robotic: click **Start conversation**, which enables spoken replies and begins/retries the hands-free session. In Settings, choose an installed voice such as Microsoft Kalpana and click **Test system voice**. Local WinRT/OneCore voices produce WAV playback even when the browser does not expose the installed voice; browser speech remains a fallback. Saved URI/name/language and the chosen speed persist. If playback fails, inspect the diagnostic and click **Retry voice**; also check the app/site mute state and speaker output. Browser audio can require one click after reload. `Natural AI voice` is a separate optional paid setting. The default speed is 1.15×; a manually saved speed remains unchanged.
+- Image input is unavailable: update dependencies so Pillow is installed, start Ollama and check the local image-model status. Install a vision-capable model if none is available; text-only `llama3.2` cannot inspect an image. PNG/JPEG/WebP, at most four images/10 MB, are supported. Failed requests keep queued images for retry.
+- Screen/camera is unavailable: use the visible Share screen/Camera controls and allow the browser picker/permission. Stop sharing releases the device tracks. Sharing supplies snapshots for sent messages; periodic visual check-ins additionally require both suggestion and shared-view check-in options. They do not silently start a device or store captures.
+- SARA never starts a conversation: enable **Suggest a next step** and choose a check-in interval in Settings. Check-ins wait until the dashboard is visible and idle; busy replies, speech and action reviews suppress them. Optional visual check-ins require an already active share and the separate checkbox.
+- A routine will not run: check its saved steps, review/trusted mode and Pause actions state. Reload if its revision changed, and inspect per-step results before retrying a partial run. Saved workflows support only bounded built-in app, approved routine URL/search, YouTube and media steps.
+- Audio controls do not affect the expected player/device: Refresh audio reads Windows' current default output endpoint. Verify the selected Windows output device. Media keys are dispatched to the operating system; a received key is not guaranteed to change a particular browser/player.
 - Colorful terminal logs do not need a plugin. SARA now labels startup, API requests, Boss messages, SARA replies, actions, speech/TTS and errors with ANSI colors. Set `$env:SARA_COLOR = "0"` before `start_sara.bat` if you want plain text logs.
 - Hindi/Hinglish is spelled out: keep a Hindi Windows voice installed (for example Kalpana). New Hindi/Hinglish AI replies use Devanagari for Hindi words and Latin script for English terms, so the Hindi voice can pronounce the sentence as Hindi; older Roman-Hindi text still uses the local pronunciation lexicon. Unknown names/spellings can use a custom pronunciation entry. `SARA` is spoken as `Sara`, and Markdown/code blocks are excluded from normal narration.
 - Thinking is slow: restart SARA and allow its background model warmup. Local chat now streams text as it arrives and no longer waits for dashboard refresh after a reply. The default model is CPU-bound on this laptop; long replies and uncached context still take time. Use `/api/performance` to inspect measured first-token/total latency, or run `.\.venv\Scripts\python.exe tests\benchmark_latency.py` for a 32-token local test without saving a conversation. This benchmark still uses the laptop's current recent context locally; only timing/counts are printed.
@@ -154,7 +191,7 @@ ollama list
 - Reminder notifications run with SARA or the optional current-user scheduled worker. Enable that worker to check reminders while the server is closed; Windows sign-in is required.
 - Voice input/output and the live animated HUD are browser features; wake mode requires the dashboard to remain open. It automatically re-arms after SARA replies, after short browser recognition timeouts, and when the tab becomes visible again. Browser microphone permission and its first user gesture are still required by browser privacy rules.
 - The optional OpenAI speech endpoint currently uses `gpt-4o-mini-tts`. OpenAI's documentation lists it for shutdown on January 6, 2027; move that optional mode to the Realtime API before then.
-- This remains a local web application, not a signed native desktop installer. Screen vision and realtime interruptible voice are future roadmap work.
+- This remains a local web application, not a signed native desktop installer. Explicit image/screen/camera snapshots and opt-in periodic shared-view check-ins are implemented. Continuous video understanding, universal computer control and realtime interruptible voice remain roadmap work.
 
 For permission scope and risk rules, see [SARA_ACCESS_REQUIREMENTS.md](SARA_ACCESS_REQUIREMENTS.md).
 
@@ -172,12 +209,14 @@ Restart the server after changing these PowerShell environment values.
 | `SARA_CONTEXT_TOKENS` | `4096` | Ollama context window |
 | `SARA_AI_TIMEOUT` | `40` | Local AI response budget in seconds |
 | `SARA_CLOUD_TIMEOUT` | `25` | Optional cloud request timeout; automatic SDK retries disabled |
+| `SARA_VISION_MODEL` | First suitable installed model | Prefer a local model that advertises vision; never downloads it automatically |
+| `SARA_VISION_TIMEOUT` | `90` | Local image-answer budget in seconds |
 
 Speed changes implemented: compact capability/memory prompts, incremental text output, immediate local greetings, a short unavailable-provider cooldown, cached health probes, background dashboard refresh, bounded activity-log tail reads, pruned workspace scanning and browser page reuse. Action confirmations and app readiness waits remain enforced. Controlled browser work stays on one owner thread; shutdown cancels queued actions and waits for an already running action before closing its browser resources.
 
 On November 4, 2026, a local 32-token test on the existing CPU-only `llama3.2` measured 30.49s total / 28.44s first text before optimization. With a compact new prompt and resident model it measured 12.28s / 10.48s; a further different prompt with a reusable prefix measured 2.29s / 0.38s. The initial run included 3.36s model load. These are small observed samples, not a promise for every question or external website.
 
-Further options: benchmark a smaller local model for speed/quality tradeoffs, investigate supported GPU acceleration for Intel Arc, and add sentence-by-sentence streamed audio. User-editable name pronunciations are already available in Settings. No model download, global driver change or paid voice mode was automatically enabled.
+Further options: benchmark local model speed/quality, investigate supported GPU acceleration for Intel Arc, and add sentence-by-sentence streamed audio. User-editable name pronunciations are available in Settings. The requested local vision setup installed `gemma3:4b`; SARA itself does not auto-download models, change global drivers or enable paid voice mode.
 
 ## 12. Offline verification
 
@@ -196,10 +235,20 @@ With the installed Playwright Chromium runtime, browser checks can load only app
 .\.venv\Scripts\python.exe tests\ui_voice_preferences_smoke.py
 .\.venv\Scripts\python.exe tests\ui_smoke.py fixture
 .\.venv\Scripts\python.exe tests\ui_hud_smoke.py
+.\.venv\Scripts\python.exe tests\ui_vision_controls_smoke.py
+.\.venv\Scripts\python.exe tests\ui_visual_chat_smoke.py
+.\.venv\Scripts\python.exe tests\ui_voice_start_smoke.py
+.\.venv\Scripts\python.exe tests\ui_proactive_smoke.py
+.\.venv\Scripts\python.exe tests\ui_abilities_smoke.py
+.\.venv\Scripts\python.exe tests\ui_abilities_workflow_smoke.py
 ```
 
-On November 13, 2026, **210 offline tests and these six browser checks passed**. They cover saved history rendering, streamed chat, approval state, malformed-data recovery, approved-memory deletion, natural-time planning, Hindi/English preparation, delayed voice restoration, pronunciation updates and the live HUD. The HUD check verifies changing canvas pixels/frames, no portrait/video requests, pixel-density cap, app-state transitions, hidden-view pause/resume and static reduced-motion rendering. Desktop window-fit checks pass at 1366×768, 1024×768, 1092×614 and 1024×600; mocked-data screenshots at 1440×900 and 390×844 were visually inspected. The 800×600 mobile layout intentionally scrolls vertically.
+The latest 16 November pass recorded **343 isolated offline tests and all twelve browser checks passing**; the full offline suite took 1.602 seconds. This includes the earlier ten browser checks plus the new ability controls/workflow scripts above. Media validation, routine grammar, frozen updates, replay/stale rejection, partial outcomes and persisted result display are covered with mocked native effects. The earlier 284/ten-browser baseline and 13 November passes remain historical evidence in [SARA_PROJECT_STATUS.md](SARA_PROJECT_STATUS.md). No fixture grants real device access or proves that a media key changed actual playback.
 
-Microsoft Kalpana was present in the machine's Windows voice inventory. Physical pronunciation and speaker latency still require listening to `Test system voice` in the running app. Mock browser results do not establish real Windows app outcomes, notification delivery or external provider quality. The current status and next acceptance checks are tracked in [SARA_PROJECT_STATUS.md](SARA_PROJECT_STATUS.md).
+The updated server was restarted after its existing project process was verified. Live read-only checks reported Ollama/`llama3.2` ready, trusted mode, audio available at 40%/unmuted, and no saved routines. No personal routines were seeded and no speaker/media/app changes were made during that readiness check.
+
+The HUD check verifies changing canvas pixels/frames, no portrait/video requests, pixel-density cap, app-state transitions, hidden-view pause/resume and static reduced-motion rendering. Desktop window-fit checks covered 1366×768, 1024×768, 1092×614 and 1024×600; mocked-data screenshots were visually inspected. The 800×600 mobile layout intentionally scrolls vertically.
+
+Microsoft Kalpana produced real local Hindi WAV audio, the user confirmed hearing the standalone Windows playback test, and the updated server's local WAV endpoint returned valid audio. Actual dashboard playback, mixed-language pronunciation and speaker/HUD latency still require listening to **Test system voice** in the running app. Mock browser results do not establish physical microphone/camera/screen behavior, real Windows app outcomes, notification delivery or external provider quality. The current status and next acceptance checks are tracked in the ledger.
 
 If a damaged local JSON file needs repair, the next successful write preserves its original bytes alongside it as `filename.json.recovery-<id>.bak`. A filename-only console message identifies that backup.

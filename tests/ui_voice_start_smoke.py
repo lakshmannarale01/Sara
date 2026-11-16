@@ -76,8 +76,20 @@ def main():
         page.evaluate("__startVoice.endBrowser()")
         expect(page.locator("#stop-speech")).to_be_hidden()
         expect(page.locator("#retry-voice")).to_be_hidden()
+
+        # Playback can fail after synthesis and the start event succeeded.
+        # Preserve that actual failure reason instead of the earlier success label.
+        mode["windows"] = "success"
+        page.locator("#start-conversation").click()
+        page.wait_for_function("__startVoice.audio.length===2")
+        page.evaluate("__startVoice.audio[1].onplaying();__startVoice.audio[1].onerror()")
+        expect(page.locator("#voice-diagnostics")).to_contain_text("Windows audio playback failed")
+        expect(page.locator("#voice-status")).to_contain_text("Windows audio playback failed")
+        expect(page.locator("#retry-voice")).to_be_visible()
+        expect(page.locator("#stop-speech")).to_be_hidden()
+        assert page.locator("#character-stage").get_attribute("data-state") != "speaking"
         assert not errors, errors
-        print("PASS: Start conversation enables speech/wake and requests greeting; installed Windows voice used; HUD waits for actual audio onplaying; failed Windows generation falls back to browser voice onstart/end")
+        print("PASS: Start conversation enables speech/wake; installed Windows voice; audio-start HUD sync; generation failure browser fallback; late playback failure preserves diagnostic and Retry")
         browser.close()
 
 

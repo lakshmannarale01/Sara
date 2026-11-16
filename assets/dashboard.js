@@ -1,6 +1,7 @@
 import {actionRequest, actionDetails} from './action-router.js';
 import {createHudCore} from './hud-core.js';
 import {initializeVisionControls} from './vision-client.js';
+import {initializeAbilities} from './abilities-client.js';
 
 const $ = selector => document.querySelector(selector);
 const $$ = selector => [...document.querySelectorAll(selector)];
@@ -41,8 +42,10 @@ function toast(message) {
   clearTimeout(toastTimer);$('#toast').textContent=message;$('#toast').hidden=false;
   toastTimer=setTimeout(()=>{$('#toast').hidden=true;},5500);
 }
-async function api(path, body, timeout=12000) {
+async function api(path, body, timeout=12000, signal) {
   const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),timeout);
+  const cancel=()=>controller.abort();
+  signal?.addEventListener('abort',cancel,{once:true});if(signal?.aborted)cancel();
   try {
     const response=await fetch(path,{method:body===undefined?'GET':'POST',
       headers:body===undefined?{}:{'Content-Type':'application/json'},
@@ -54,7 +57,7 @@ async function api(path, body, timeout=12000) {
     if(error.name==='AbortError') throw new Error('The request timed out. Its outcome is unknown; check activity before retrying an action.');
     if(error instanceof TypeError) throw new Error('Could not reach SARA. Start the local server and try again.');
     throw error;
-  } finally {clearTimeout(timer);}
+  } finally {clearTimeout(timer);signal?.removeEventListener('abort',cancel);}
 }
 async function chatApi(message,onDelta,attachments=[]) {
   const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),attachments.length?120000:75000);
@@ -74,7 +77,10 @@ async function chatApi(message,onDelta,attachments=[]) {
     throw error;
   } finally {clearTimeout(timer);reader?.releaseLock();}
 }
-const visualInputs=initializeVisionControls({request:api,onError:toast});
+const visualInputs=initializeVisionControls({request:api,onError:toast,onImagesChange:info=>{
+  if(!info.activeSource && state.checkInVisual)cancelCheckIn();
+}});
+const abilityControls=initializeAbilities({request:api,onCommand:submitMessage,onReview:reviewAction,onError:toast});
 state.lastInteraction=Date.now();
 
 function dateText(value, empty='Time not set') {
@@ -98,6 +104,7 @@ function setView(view, updateHash=true) {
   $('#view-name').textContent={home:'Command center',chat:'Talk to SARA',day:'My day',memories:'Memories',activity:'Activity',settings:'Settings & controls'}[view];
   if(updateHash) history.replaceState(null,'','#'+view);
   if(state.ready && ['day','memories','activity','settings'].includes(view))void refreshData();
+  if(state.ready && view==='settings')void abilityControls.refresh();
 }
 function setCharacter(status) {
   const stage=$('#character-stage');stage.dataset.state=status;
@@ -131,6 +138,7 @@ async function submitMessage(message) {
   catch(error){toast(error.message);return;}
   finally {state.preparingMessage=false;}
   if(!message && !attachments.length) return;
+  cancelCheckIn();
   state.lastInteraction=Date.now();
   setView('chat');$('#message').value='';resizeComposer();
   const userContent=addMessage(message || 'Please explain this image.','you');
@@ -152,6 +160,7 @@ async function submitMessage(message) {
     const text=data.reply || 'No reply was returned. Please try again.';
     const content=liveContent || addMessage(text,'sara',data.provider);
     if(liveContent){content.querySelector('.message-text').textContent=text;content.querySelector('.message-author').append(el('small','',humanize(data.provider || 'AI')));}
+    appendStepResults(content,data.tool_result);
     if(data.timing){content.title='Reply: '+(data.timing.total_ms/1000).toFixed(1)+'s'+(data.timing.first_token_ms!==null&&data.timing.first_token_ms!==undefined?' · first text '+(data.timing.first_token_ms/1000).toFixed(1)+'s':'');}
     if(data.timing?.incomplete)toast('Reply stopped at the response limit. Ask SARA to continue for more detail.');
     if(data.download==='/api/calendar.ics') {
@@ -159,6 +168,15 @@ async function submitMessage(message) {
     }
     if(data.pending_cancelled && state.pendingAction){settleProposal(state.pendingAction.proposal_id,'Cancelled');state.pendingAction=null;}
     if(data.requires_confirmation && data.action)attachProposal(content,data.action);
+    if(data.visual_request==='camera') {
+      const action = el('button','visual-command-action','Open camera');
+      action.type='button'; action.addEventListener('click',()=>{ action.disabled=true; void visualInputs.startCamera(); });
+      content.append(action);
+    } else if(data.visual_request==='screen') {
+      const action = el('button','visual-command-action','Share screen');
+      action.type='button'; action.addEventListener('click',()=>{ action.disabled=true; void visualInputs.startScreen(); });
+      content.append(action);
+    }
     setBusy(false);
     if(data.review_pending && data.action)void reviewAction(data.action);
     else if(state.speak) void speak(text);
@@ -186,8 +204,21 @@ function noteLink(result) {
 function showToolResult(result,failed=false) {
   const text=typeof result.result==='string'?result.result:result.result?.result || result.error || (failed?'Action did not complete.':'Action completed.');
   const content=addMessage(text,'sara',failed?'tool-error':'tool-result');
+  appendStepResults(content,result);
   const link=noteLink(result);if(link)content.append(link);
   return text;
+}
+function appendStepResults(content,result) {
+  if(!Array.isArray(result?.step_results) || !result.step_results.length)return;
+  const details=el('details','routine-outcomes'),summary=el('summary','','Routine step results'),list=el('ol');
+  for(const row of result.step_results.slice(0,8)){
+    const text=typeof row.result?.result==='string'?row.result.result:row.result?.error || 'No verified result was returned.';
+    list.append(el('li','',humanize(row.action?.type || 'step')+' · '+humanize(row.status)+' — '+text));
+  }
+  details.append(summary,list);
+  const unrun=Number(result.total_steps)-result.step_results.length;
+  if(unrun>0)details.append(el('p','',unrun+' later '+(unrun===1?'step was':'steps were')+' not requested.'));
+  content.append(details);
 }
 
 function reviewAction(action) {
@@ -385,9 +416,9 @@ function renderPolicy(policy) {
   $('#pause-actions span').textContent=state.stopped?'Resume actions':'Pause actions';
   $('#pause-actions').setAttribute('aria-pressed',String(state.stopped));
   $('#pause-actions').style.color=state.stopped?'var(--peach)':'';
-  $('#policy-status').textContent=state.stopped?'New actions are paused. Conversation is still available.':'Actions are enabled and require your approval.';
+  $('#policy-status').textContent=state.stopped?'New actions are paused. Conversation is still available.':policy.access_mode==='trusted'?'Trusted routines are enabled. Supported media, browsing, built-in apps and saved routines can run directly; other changes need review.':'Review mode is enabled. Actions need your approval.';
   const list=$('#policy-list');list.replaceChildren();
-  Object.entries(policy.actions||{}).forEach(([name,info])=>{const row=el('div','policy-row');row.append(el('span','',humanize(name)),el('span','badge '+info.risk,info.risk+' · approve'));list.append(row);});
+  Object.entries(policy.actions||{}).forEach(([name,info])=>{const row=el('div','policy-row'),scoped=['media_control','run_routine','open_app','open_browser_url','browser_open','youtube_play'].includes(name)&&policy.access_mode==='trusted';row.append(el('span','',humanize(name)),el('span','badge '+info.risk,info.risk+(scoped?' · trusted scope':' · review')));list.append(row);});
 }
 function renderCapabilities(capabilities) {
   const list=$('#capabilities');list.replaceChildren();
@@ -586,7 +617,7 @@ async function speakWindows(text,sequence) {
     state.audioUrl=URL.createObjectURL(blob);const audio=new Audio(state.audioUrl);state.audio=audio;
     audio.onplaying=()=>{if(sequence!==state.speechSequence)return;state.speechStarted=true;state.lastVoicePlayback='Windows local · '+local.name+' · '+Number($('#voice-rate').value).toFixed(2)+'×';$('#voice-diagnostics').textContent=state.lastVoicePlayback;$('#voice-status').textContent='Speaking · '+local.name;setCharacter('speaking');};
     audio.onended=()=>finishSpeech(sequence);
-    audio.onerror=()=>{if(sequence===state.speechSequence){showVoiceRetry('Windows audio playback failed. Check speaker output, then retry.');finishSpeech(sequence,true);}};
+    audio.onerror=()=>{if(sequence===state.speechSequence){state.lastVoicePlayback='Windows audio playback failed. Check speaker output, then retry.';finishSpeech(sequence,true);}};
     await audio.play();return true;
   } catch(error) {
     if(sequence!==state.speechSequence)return true;
@@ -781,7 +812,7 @@ async function togglePause(forceStop=false) {
     const stopped=forceStop || !state.stopped;
     await api(stopped?'/api/policy/stop':'/api/policy/resume',{});
     if(stopped){pauseRecognition();stopSpeech();closeReview();scheduleWake();}
-    renderPolicy(await api('/api/policy'));toast(stopped?'New actions paused. You can still talk to SARA.':'Actions resumed. Each action still needs your approval.');
+    renderPolicy(await api('/api/policy'));toast(stopped?'New actions paused. You can still talk to SARA.':'Actions resumed under your selected access mode.');
   } catch(error){toast(error.message);} finally{button.disabled=false;}
 }
 
@@ -792,6 +823,7 @@ document.addEventListener('click',event=>{
 });
 window.addEventListener('hashchange',()=>setView(location.hash.slice(1),false));
 $('#start-conversation').addEventListener('click',()=>{
+  cancelCheckIn();
   setView('chat');$('#message').focus();setSpeakPreference(true);
   state.lastInteraction=Date.now();state.voiceConversation=true;setWakePreference(true);openFollowUpWindow();
   void conversationCheckIn(true);
@@ -818,10 +850,11 @@ $('#mic-button').addEventListener('click',()=>{
   state.voiceConversation=true;setWakePreference(true);openFollowUpWindow();
 });
 $('#wake-toggle').addEventListener('change',event=>setWakePreference(event.target.checked));
-$('#proactive-toggle').addEventListener('change',event=>{state.proactive=event.target.checked;prefs.set('sara-proactive',state.proactive);refreshSuggestions();});
+$('#proactive-toggle').addEventListener('change',event=>{state.proactive=event.target.checked;prefs.set('sara-proactive',state.proactive);if(!state.proactive)cancelCheckIn();refreshSuggestions();});
+$('#proactive-vision').addEventListener('change',()=>{if(!$('#proactive-vision').checked && state.checkInVisual)cancelCheckIn();});
 document.addEventListener('keydown',event=>{if(event.ctrlKey && event.altKey && event.key==='.'){event.preventDefault();togglePause(true);}});
-document.addEventListener('visibilitychange',()=>{if(document.hidden){stopMicrophone(false);stopSpeech();}else{openFollowUpWindow();void refreshData();scheduleWake();}});
-window.addEventListener('pagehide',()=>{stopMicrophone(false);stopSpeech();});
+document.addEventListener('visibilitychange',()=>{if(document.hidden){cancelCheckIn();stopMicrophone(false);stopSpeech();}else{openFollowUpWindow();void refreshData();scheduleWake();}});
+window.addEventListener('pagehide',()=>{cancelCheckIn();stopMicrophone(false);stopSpeech();});
 window.addEventListener('online',()=>{state.recognitionRetryAt=0;state.recognitionFailures=0;scheduleWake();});
 
 function updateClock() {
@@ -830,17 +863,26 @@ function updateClock() {
   $('#today-date').textContent=now.toLocaleDateString(undefined,{weekday:'short',month:'short',day:'numeric'});
   $('#today-short').textContent=now.toLocaleDateString(undefined,{month:'short',day:'numeric'});
 }
+function cancelCheckIn() {
+  state.checkInEpoch=(state.checkInEpoch || 0)+1;
+  state.checkInController?.abort();
+  state.checkInController=null;state.checkingIn=false;state.checkInVisual=false;
+}
 async function conversationCheckIn(greeting=false) {
-  if(!state.historyLoaded || state.busy || state.speaking || state.dialog || document.hidden || state.checkingIn)return;
-  const activity=state.lastInteraction;state.checkingIn=true;
+  if(!state.historyLoaded || state.busy || state.speaking || state.dialog || document.hidden || state.checkingIn || (!greeting && !state.proactive))return;
+  const activity=state.lastInteraction,epoch=state.checkInEpoch || 0,controller=new AbortController();
+  state.checkingIn=true;state.checkInController=controller;state.lastCheckIn=Date.now();
   try {
-    const data=await api('/api/check-in',{kind:greeting?'greeting':'suggestion'});
-    if(state.busy || state.speaking || state.dialog || state.lastInteraction!==activity)return;
+    const image=!greeting && $('#proactive-vision').checked ? await visualInputs.captureSharedView() : null;
+    state.checkInVisual=Boolean(image);
+    if(controller.signal.aborted || document.hidden || epoch!==(state.checkInEpoch || 0))return;
+    const data=await api('/api/check-in',{kind:greeting?'greeting':'suggestion',...(image?{visual:true,attachments:[image]}:{})},image?120000:12000,controller.signal);
+    if(!data.reply || controller.signal.aborted || document.hidden || epoch!==(state.checkInEpoch || 0) || state.busy || state.speaking || state.dialog || state.lastInteraction!==activity)return;
+    if(!greeting && (!state.proactive || (image && !$('#proactive-vision').checked)))return;
     addMessage(data.reply,'sara','local-check-in');
-    state.lastCheckIn=Date.now();
     if(state.speak)void speak(data.reply);
-  } catch(error){if(greeting)toast(error.message);}
-  finally {state.checkingIn=false;}
+  } catch(error){if(greeting && !controller.signal.aborted)toast(error.message);}
+  finally {if(state.checkInController===controller){state.checkingIn=false;state.checkInVisual=false;state.checkInController=null;}}
 }
 updateClock();setInterval(updateClock,60000);
 const retryVoice=el('button','text-button','Retry voice');retryVoice.id='retry-voice';retryVoice.type='button';retryVoice.hidden=true;
@@ -885,7 +927,7 @@ navigator.permissions?.query({name:'microphone'}).then(permission=>{
 $('#send-button').disabled=true;
 state.ready=true;
 void refreshData(true);
-try {for(const item of await api('/api/conversations',undefined,2500)){if(item.initiated_by!=='sara')addMessage(item.question||'','you','',item.time);addMessage(item.answer||'','sara',item.provider,item.time);}}
+try {for(const item of await api('/api/conversations',undefined,2500)){if(item.initiated_by!=='sara')addMessage(item.question||'','you','',item.time);const content=addMessage(item.answer||'','sara',item.provider,item.time);appendStepResults(content,item);}}
 catch {toast('Saved conversation could not load; new messages are still available.');}
 state.historyLoaded=true;scheduleWake();
 $('#send-button').disabled=false;

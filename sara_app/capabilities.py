@@ -5,9 +5,12 @@ CAPABILITIES = {
     "memory": {"status": "available", "risk": "medium", "confirmation": True, "scope": "only user-approved facts are used; memory stays local and can be reviewed, edited, or removed"},
     "voice": {"status": "available", "risk": "low", "scope": "browser microphone input after permission; spoken output uses installed system voices, with optional OpenAI TTS"},
     "image_understanding": {"status": "partial", "risk": "medium", "scope": "explicitly attached PNG/JPEG/WebP snapshots; requires Pillow and an installed local Ollama model advertising vision support; images are not saved or sent to cloud AI"},
-    "screen_vision": {"status": "partial", "risk": "medium", "scope": "browser-selected screen/window sharing after the user grants permission; only a current snapshot attached to a sent message is analyzed by a ready local vision model; no background screen reading"},
-    "camera_vision": {"status": "partial", "risk": "medium", "scope": "explicit camera start/stop and browser permission; snapshots are analyzed only when sent with a message to a ready local vision model; no hidden camera capture or continuous video understanding"},
+    "screen_vision": {"status": "partial", "risk": "medium", "scope": "browser-selected screen/window sharing after explicit permission; local snapshot analysis with a sent message, or periodic snapshots only with both check-in options enabled; Stop sharing ends further capture; no hidden screen reading"},
+    "camera_vision": {"status": "partial", "risk": "medium", "scope": "explicit camera start/stop and browser permission; local snapshots with sent messages, or periodic snapshots only with both check-in options enabled; no hidden capture, saved images or continuous video understanding"},
+    "proactive_check_ins": {"status": "partial", "risk": "medium", "scope": "opt-in idle check-ins while the dashboard is visible, at a selected 5/15/30/60-minute interval; local agenda by default, already-shared screen/camera only with separate explicit consent; no automatic actions or long-term memory changes"},
     "routine_access": {"status": "available", "risk": "medium", "scope": "user-selectable review or trusted routine mode; only bounded browsing/media and built-in app launches skip repeated reviews in trusted mode; sending, deletion, file writes, custom executables and focused-window input remain reviewed"},
+    "windows_audio_controls": {"status": "available", "risk": "low", "confirmation": True, "scope": "read default Windows output volume/mute; bounded volume and mute changes with Core Audio readback; Play/Pause, Next, Previous and Stop media-key dispatch does not verify the player's response; supported controls can run directly in trusted mode"},
+    "saved_routines": {"status": "available", "risk": "medium", "confirmation": True, "scope": "up to 30 named routines, 1–8 bounded app/browsing/YouTube/media steps each; reviewed save/update/delete, exact revision-bound run, trusted scope rechecked per step, Stop and truthful partial outcomes; no shell, arbitrary input or nested routines"},
     "pronunciation_preferences": {"status": "available", "risk": "low", "confirmation": True, "scope": "local user-owned word/phrase say-as entries applied only to spoken replies"},
     "system_status": {"status": "available", "risk": "low", "scope": "read-only local readiness and SARA data counts"},
     "open_documentation_url": {"status": "available", "risk": "low", "confirmation": True, "scope": "opens a requested HTTPS documentation page after approval"},
@@ -35,7 +38,7 @@ CAPABILITIES = {
     "safety_dashboard": {"status": "available", "risk": "low", "scope": "view action risks and pause or resume new actions"},
     "messaging": {"status": "partial", "risk": "critical", "confirmation": True, "scope": "WhatsApp Web draft and guarded send using SARA Chromium profile"},
     "email": {"status": "partial", "risk": "high", "confirmation": True, "scope": "opens a reviewable mailto draft; no mail API or direct send"},
-    "system_control": {"status": "planned", "risk": "critical", "confirmation": True, "scope": "broader Windows system control is not implemented; SARA has no unrestricted shell access"},
+    "system_control": {"status": "partial", "risk": "high", "confirmation": True, "scope": "bounded Windows volume/media controls, allowlisted app launches and saved routines; broader system settings, shutdown/restart and unrestricted shell/admin access are not implemented"},
     "desktop_keyboard": {"status": "available", "risk": "high", "confirmation": True, "scope": "types text or sends a safe shortcut only to the currently focused app, after approval"},
 }
 

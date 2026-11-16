@@ -5,6 +5,7 @@
 ### Conversation
 
 - Ask questions by text or voice.
+- Click **Start conversation** to enable spoken replies, start/retry hands-free listening and hear a local greeting. Browser microphone permission is still required. Settings → **Test system voice** and **Retry voice** help diagnose audio separately from recognition.
 - The interface uses a live canvas HUD with cyan/orange rotating rings and distinct listening, thinking, speaking and approval states. It uses no portrait picture or embedded video; reduced-motion preferences are respected.
 - SARA aims to reply in the user's language and style, including Hindi/Hinglish.
 - Spoken replies are enabled by default, with automatic female system voice selection when available and a 1.15× default speed. Hindi/Hinglish AI replies and common action, memory, calendar, task and capability responses use Devanagari Hindi while preserving English product and technical terms; the local speech lexicon also converts common Roman-Hindi tokens without another model call. Settings diagnostics show the voice, language, and speed queued for the latest system reply, and warn if no Hindi voice was available. Settings also offers optional natural AI voice through the OpenAI API when configured; it uses API credits and is disclosed as AI-generated.
@@ -17,6 +18,7 @@
 - AI text streams incrementally; routine replies use a bounded output/context budget. Greetings and existing local tool routes do not require an AI generation.
 - System speech keeps mixed sentences together to avoid word-level voice-switch gaps, with local pronunciation cleanup, common technical Hindi phonetics, spoken acronym expansions, and an in-session preparation cache. Unfamiliar names and Roman Hindi spellings can still need a pronunciation entry.
 - Add a custom say-as rule in Settings → Pronunciation guide, or say `pronounce Kalpana as कल्पना` and approve it. Entries are stored locally and affect speech only; chat text stays unchanged. Remove entries from the same Settings panel.
+- Installed Windows OneCore voices are available through the local WAV path, including Kalpana when installed. Voice and speed are preserved; the HUD starts speaking motion only on a playback-start event. Browser speech is a fallback, and optional Natural AI voice remains a separate paid setting.
 - Performance telemetry is available at `/api/performance`; reply timing is also attached to chat responses and terminal logs.
 - Notepad notes use one exact-content review, create a unique verified UTF-8 file and request Notepad to open that file. Approved-memory profile drafts do not invent personal facts. Saved-note previews remain accessible if app launch fails.
 - Short action follow-ups resolve session-scoped pending proposals and reopen review. Actual results appear in chat; stale, cancelled, modified and duplicate proposal execution is rejected.
@@ -30,7 +32,9 @@
 - `SARA, search for Python tutorials`
 - `SARA, Delhi ka weather batao`
 
-Browser-opening and search actions require confirmation before opening a page.
+In **Settings & controls → Routine action access**, choose **Trusted routines** to skip repeated review for the bounded routine payloads in the local policy: built-in apps, YouTube navigation/play requests, Google/Bing searches, Wikipedia articles, media controls and exact approved saved routines. Other URLs and consequential actions still require review. The grant persists, can be switched back to Review every action, and always honors Pause actions.
+
+For example, `SARA, ek song play karo best on YouTube` searches in SARA's controlled browser and tries a normal video result. The result distinguishes a search page, an opened video and verified non-ad/unmuted playback; consent, network and autoplay failures are reported honestly.
 
 Semantic browser actions are available through guarded endpoints:
 
@@ -38,7 +42,7 @@ Semantic browser actions are available through guarded endpoints:
 - `POST /api/actions/browser-click-text` with an HTTPS URL and exact visible text
 - `POST /api/actions/browser-fill` with an HTTPS URL, accessible field label, and value
 
-They use a separate SARA Chromium profile and require `confirmed: true`; SARA does not silently take over an existing personal Chrome session.
+They use a separate SARA Chromium profile. Arbitrary navigation, visible-text clicks and form filling remain reviewed; trusted routine navigation is the narrow exception. SARA does not silently take over an existing personal Chrome session.
 
 ### Windows apps
 
@@ -48,9 +52,41 @@ Currently allowlisted:
 - Notepad
 - Calculator
 
-SARA asks for confirmation before launching an application.
+Trusted routines can launch the three built-in apps directly. Review mode asks before each launch.
 
 You can add a custom shortcut in **Settings & controls → App shortcuts** by entering a name and the full path to an existing `.exe`. SARA keeps that allowlist in local `sara_data/apps.json`; you can remove an entry in Settings. Say `open VS Code` (using the shortcut name you saved) to request it in chat. SARA asks for approval before every launch. Only the executable path is launched: arguments and arbitrary shell commands are not supported.
+
+### Speaker and media controls
+
+Use chat or **Settings & controls → Audio & saved routines → Speaker & playback**:
+
+- `volume status` reads the default Windows output endpoint without changing it.
+- `volume 30 percent karo` sets a level from 0–100; `volume badhao` / `volume kam karo` change it by a bounded step.
+- `mute karo`, `unmute karo`, `song pause karo`, `next song`, `previous song` and `stop music` request the corresponding named control.
+
+Volume and mute use Windows CoreAudio and include actual readback in the result. Media transport sends fixed operating-system media keys: `key_sent` is evidence of dispatch, while `playback_verified:false` means SARA did not inspect the active player's resulting state. Trusted mode can run these bounded controls directly; Review mode asks first. The shared Pause actions control still applies.
+
+### Saved routines
+
+Create a named workflow in **Audio & saved routines**, review its complete steps, and run it from the saved list or chat:
+
+```text
+create routine work mode: open notepad; volume 30 percent karo
+run routine work mode
+meri routines
+```
+
+The local store supports 30 routines with at most eight steps each: built-in apps, policy-approved routine URLs/searches, YouTube and media controls. Save/update/delete requires review. In Trusted mode, a saved run can proceed directly using the exact current ID, revision and steps; changes after review are rejected. Stop or revoked trust prevents further steps, overlapping runs are rejected, and failures retain earlier per-step results instead of reporting the entire workflow as successful. SARA does not seed personal routines, nest workflows or treat their contents as shell commands.
+
+The current 343-test/twelve-browser verification covers these paths using temporary data and mocked native effects, including readable per-step results after reload. Windows audio status was read successfully; actual speaker changes, media-player reactions and routine app outcomes remain separate acceptance checks.
+
+### Images, screen and camera
+
+- Paste, drop or attach PNG/JPEG/WebP images in chat, inspect the previews and remove anything you do not want to send. Up to four images and 10 MB total are accepted. Image-only messages are supported.
+- Use **Share screen** or **Camera** to start a visible preview and approve the browser's picker/permission. **Stop sharing** releases the tracks. SARA receives a snapshot when you send a message with the shared view included; she does not understand an unrestricted live video stream.
+- A local model that advertises vision is required. This laptop has `gemma3:4b`, with basic generated-image responses verified. Observed visual requests took about 33–60 seconds and showed shape/language-following errors, so do not assume perfect or immediate interpretation. Refresh image-model status after changing models. Images remain local, are validated with metadata stripped, and are not stored in conversation files or forwarded to a cloud fallback.
+- The separate **Suggest a next step** preference allows occasional local agenda check-ins every 5/15/30/60 minutes while the page is visible and idle. **Use my shared screen/camera for check-ins** additionally permits a periodic snapshot only while an explicit share is active. Both options must be enabled for visual check-ins; queued uploads are not sampled. Stop sharing, unchecking, hiding the page or sending a new message cancels/invalidates stale check-in replies. Snapshot reasoning uses a bounded background path but still shares local model/CPU resources.
+- These features use current context and approved memories. They do not train model weights, silently save personal facts or modify SARA's code autonomously.
 
 ### Focused desktop actions
 
@@ -123,7 +159,7 @@ Chat example: `SARA, send WhatsApp +919876543210: I will reach home at 7 PM.`
 
 ## Pending capabilities
 
-- Clicking and playing media inside browser pages without user-provided coordinates
+- Broader site-specific browser playback control and reliable player-state observation beyond the implemented YouTube workflow and fixed Windows media keys
 - Google/Outlook calendar sync (local events and ICS export are available; provider OAuth is not configured)
 - Direct email account integration and automatic email sending (SARA opens reviewable drafts only)
 - Automatic app discovery, arbitrary app arguments, and shell command execution

@@ -15,9 +15,13 @@ FILES = {
     "/assets/hud-theme.css": ("assets/hud-theme.css", "text/css; charset=utf-8"),
     "/assets/vision-client.js": ("assets/vision-client.js", "text/javascript; charset=utf-8"),
     "/assets/vision-controls.css": ("assets/vision-controls.css", "text/css; charset=utf-8"),
+    "/assets/abilities-client.js": ("assets/abilities-client.js", "text/javascript; charset=utf-8"),
+    "/assets/abilities-controls.css": ("assets/abilities-controls.css", "text/css; charset=utf-8"),
     "/assets/dashboard.css": ("assets/dashboard.css", "text/css; charset=utf-8"),
 }
 DEFAULTS = {
+    "audio/status": {"available": False, "reason": "No real Windows audio is used in this isolated fixture."},
+    "routines": {"routines": []},
     "voices/windows": {"available": False, "voices": []},
     "vision/status": {"available": False, "reason": "No local vision model in this isolated fixture."},
     "access-mode": {"mode": "review", "stopped": False},

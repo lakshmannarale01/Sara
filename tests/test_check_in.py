@@ -1,10 +1,12 @@
 """Local initiated conversation checks without providers, writes or native actions."""
 import io
+import base64
 import json
 import unittest
 from unittest.mock import Mock, patch
 
 from sara_app import server
+from sara_app import vision
 
 SESSION = "isolated-check-in-session"
 
@@ -14,6 +16,7 @@ class CheckInTests(unittest.TestCase):
         self.append = self.patched(server, "append_conversation")
         self.log = self.patched(server, "log")
         self.ask = self.patched(server, "ask", side_effect=AssertionError("A local check-in must not call a model"))
+        self.visual = self.patched(server, "ask_visual_check_in", return_value=("A useful snapshot observation.", "ollama-vision"))
         self.execute = self.patched(server, "execute_routine_action", side_effect=AssertionError("A check-in must not execute an action"))
         self.propose = self.patched(server.action_state, "propose", side_effect=AssertionError("A check-in must not propose an action"))
         self.tasks = self.patched(server, "read_tasks", return_value=[{"id": "1", "text": "Review the draft", "status": "pending"}])
@@ -51,6 +54,58 @@ class CheckInTests(unittest.TestCase):
         self.propose.assert_not_called()
         for writer in self.writers:
             writer.assert_not_called()
+
+    @staticmethod
+    def image(source="screen"):
+        output = io.BytesIO()
+        vision.Image.new("RGB", (12, 8), "blue").save(output, format="PNG")
+        return {"source": source, "data_url": "data:image/png;base64," + base64.b64encode(output.getvalue()).decode()}
+
+    @unittest.skipIf(vision.Image is None, "Pillow is required for image decoding")
+    def test_opted_in_visual_check_in_persists_metadata_only_and_never_executes(self):
+        image = self.image()
+        status, result = self.post({"session_id": SESSION, "kind": "suggestion", "visual": True, "attachments": [image]})
+        self.assertEqual(status, 200, result)
+        self.assertEqual(result["provider"], "ollama-vision")
+        self.visual.assert_called_once()
+        decoded = self.visual.call_args.args[0][0]
+        self.assertEqual((decoded["source"], decoded["width"], decoded["height"]), ("screen", 12, 8))
+        saved = self.append.call_args.args[0]
+        self.assertEqual(saved["initiated_by"], "sara")
+        self.assertEqual(saved["attachments"], [{"source": "screen", "width": 12, "height": 8}])
+        self.assertNotIn(image["data_url"], repr(self.append.call_args_list) + repr(self.log.call_args_list))
+        self.tasks.assert_not_called()
+        self.assert_no_action()
+
+    @unittest.skipIf(vision.Image is None, "Pillow is required for image decoding")
+    def test_visual_check_in_rejects_uploads_multiple_images_and_bad_source(self):
+        for images in ([self.image("upload")], [self.image(), self.image()], [self.image({})], []):
+            with self.subTest(images=len(images)):
+                status, _ = self.post({"session_id": SESSION, "kind": "suggestion", "visual": True, "attachments": images})
+                self.assertEqual(status, 400)
+        self.visual.assert_not_called()
+        self.append.assert_not_called()
+        self.log.assert_not_called()
+        self.assert_no_action()
+
+    @unittest.skipIf(vision.Image is None, "Pillow is required for image decoding")
+    def test_busy_visual_check_in_is_skipped_without_empty_history_record(self):
+        self.visual.return_value = ("", "check-in-skipped")
+        status, result = self.post({"session_id": SESSION, "kind": "suggestion", "visual": True, "attachments": [self.image("camera")]})
+        self.assertEqual(status, 200, result)
+        self.assertTrue(result["skipped"])
+        self.append.assert_not_called()
+        self.log.assert_not_called()
+        self.assert_no_action()
+
+    @unittest.skipIf(vision.Image is None, "Pillow is required for image decoding")
+    def test_snapshot_is_not_analyzed_without_explicit_visual_flag(self):
+        status, result = self.post({"session_id": SESSION, "kind": "suggestion", "attachments": [self.image()]})
+        self.assertEqual(status, 200, result)
+        self.assertEqual(result["provider"], "local-check-in")
+        self.visual.assert_not_called()
+        self.assertNotIn("attachments", self.append.call_args.args[0])
+        self.assert_no_action()
 
     def test_greeting_is_local_devanagari_and_marked_as_sara_in_history(self):
         status, result = self.post({"session_id": SESSION, "kind": "greeting"})

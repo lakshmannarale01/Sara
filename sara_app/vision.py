@@ -51,7 +51,7 @@ def validate_attachments(raw):
         if not isinstance(attachment, dict):
             raise ValueError("Each attachment must contain a PNG, JPEG or WebP image.")
         source = attachment.get("source", "upload")
-        if source not in _SOURCES:
+        if not isinstance(source, str) or source not in _SOURCES:
             raise ValueError("Unknown image source; choose upload, screen or camera.")
         data_url = attachment.get("data_url")
         if not isinstance(data_url, str) or "," not in data_url:
